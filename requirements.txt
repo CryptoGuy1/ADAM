@@ -21,7 +21,7 @@ matplotlib==3.10.0            # figure generation
 # --- comparator only ---
 # The Cloud-Only baseline is the single component that calls an external API.
 # ADAM itself never does; see Section 4.5.3.
-openai==1.59.0
+openai==1.59.2
 
 # --- development ---
 pytest==8.3.4
