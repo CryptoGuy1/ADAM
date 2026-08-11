@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+title: "ADAM: Agentic Decentralized Autonomous Machines"
+message: "If you use this software, please cite it using these metadata."
+type: software
+authors:
+  - family-names: Nweke
+    given-names: Benjamin C.
+    affiliation: "University of Wyoming"
+  - family-names: Ramezan
+    given-names: Gholamreza
+    affiliation: "Fides Innova Labs"
+  - family-names: Saraji
+    given-names: Soheil
+    affiliation: "University of Wyoming"
+abstract: >-
+  Reference implementation of ADAM, a crew-based agentic AI framework for
+  decentralized physical infrastructure networks, evaluated on a four-node
+  edge testbed for methane monitoring. Combines on-device language-model
+  reasoning, semantic memory, and blockchain-backed governance.
+keywords:
+  - agentic AI
+  - decentralized physical infrastructure
+  - edge computing
+  - methane monitoring
+  - multi-agent systems
+license: MIT
+version: 1.0.0
+date-released: 2026-07-25

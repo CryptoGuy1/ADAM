@@ -1,0 +1,21 @@
+{
+  "name": "adam-governance",
+  "version": "2.0.0",
+  "description": "Governance contracts for ADAM (Agentic Decentralized Autonomous Machines)",
+  "license": "MIT",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+    "deploy:fides": "hardhat run scripts/deploy.js --network fides",
+    "node": "hardhat node"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.0",
+    "dotenv": "^16.4.5"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.2"
+  }
+}

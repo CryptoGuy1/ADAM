@@ -1,0 +1,27 @@
+# ADAM runtime and evaluation dependencies.
+#
+# The runtime itself is deliberately thin: the edge nodes are Raspberry Pi 5
+# units and every megabyte spent on a dependency is a megabyte the 1B model
+# does not get. adam/llm/client.py uses only the standard library for HTTP.
+#
+# Install:  pip install -r requirements.txt
+
+# --- runtime (required on the edge nodes) ---
+weaviate-client==4.17.0       # semantic memory, Section 3.1.2
+web3==7.6.0                   # Fides Innova PoA client, Section 3.1.3
+python-dotenv==1.1.1
+psutil==7.0.0                 # resource counters for Table 6
+
+# --- evaluation only (not needed on the nodes) ---
+numpy==2.2.1
+scipy==1.15.1                 # Wilcoxon signed-rank, Section 3.4.5
+scikit-learn==1.6.1           # Random Forest baseline, Section 3.4.4
+matplotlib==3.10.0            # figure generation
+
+# --- comparator only ---
+# The Cloud-Only baseline is the single component that calls an external API.
+# ADAM itself never does; see Section 4.5.3.
+openai==1.59.0
+
+# --- development ---
+pytest==8.3.4

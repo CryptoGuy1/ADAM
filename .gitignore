@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+node_modules/
+blockchain/artifacts/
+blockchain/cache/
+blockchain/deployment.*.json
+results/
+data/artifacts/
+.pytest_cache/
+.DS_Store
