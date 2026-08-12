@@ -27,7 +27,7 @@ Each agent votes on the proposed action using its own role-specific evidence
 (Section 3.2): the Sensor checks consistency with the local trigger, the
 Aggregator with cross-node context, the Decision agent with its own semantic
 interpretation. Independent evidence is what makes the vote meaningful; if all
-three simply echoed the Decision Agent, Equation (4) would be theatre.
+three simply echoed the Decision Agent, Equation (4) would be theater.
 """
 
 from __future__ import annotations

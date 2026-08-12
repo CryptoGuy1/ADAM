@@ -10,7 +10,7 @@ rather than against a second table of literals. Code and data cannot diverge
 without the check failing.
 
 The dataset is the source of truth for measured quantities. Design choices that
-govern behaviour rather than describe it, such as the screening threshold, the
+govern behavior rather than describe it, such as the screening threshold, the
 decision deadline and the quorum rule, stay in :mod:`adam.config`.
 """
 

@@ -108,7 +108,7 @@ EXAMPLE_OUTPUT: Dict[str, Any] = {
     "severity": "HIGH",
     "reasoning": (
         "Three of four nodes agree near 1,350 ppm while node-04 reads 331 ppm "
-        "and is flagged as disagreeing, so the fused estimate of 1,130 ppm "
+        "and is flagged as disagreeing, so the fused estimate of 1,088 ppm "
         "understates the corroborated concentration. Two retrieved cases at "
         "comparable readings were confirmed releases."
     ),
@@ -180,7 +180,7 @@ def build_user_prompt(
 
     node_lines = "\n".join(
         f"  {r.get('node_id', '?')}: {r.get('methane_ppm', '?')} ppm"
-        + (f" (weight {1.0/r['error_variance']*1e3:.3f}e-3)"
+        + (f" (weight {1.0/r['error_variance']*1e4:.3f}e-4)"
            if r.get("error_variance") else "")
         for r in node_readings
     )
@@ -293,13 +293,13 @@ def _representative_user_prompt() -> str:
     from ..mechanisms import fuse_readings
     from ..schemas import SensorReading
 
-    # Calibration variances from residuals against the co-located NDIR
-    # reference (Section 3.2.2).
+    # Per-node error variances from residuals of the raw readings against the
+    # co-located NDIR reference (Section 3.2.2).
     readings = [
-        ("node-01", 1298.0, 879.1),
-        ("node-02", 1412.0, 1187.0),
-        ("node-03", 1355.0, 1125.7),
-        ("node-04", 331.0, 1271.5),
+        ("node-01", 1298.0, 6226.2),
+        ("node-02", 1412.0, 6609.6),
+        ("node-03", 1355.0, 6399.7),
+        ("node-04", 331.0, 6073.2),
     ]
     fusion = fuse_readings(
         [SensorReading(n, 0.0, ppm, error_variance=v) for n, ppm, v in readings],

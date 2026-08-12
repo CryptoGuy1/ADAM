@@ -155,7 +155,7 @@ class InMemoryStore:
     """Server-free store with the same semantics, for trials and tests.
 
     Retrieval ranks by absolute distance in fused concentration, which
-    approximates the nearest-neighbour behaviour of the vector store closely
+    approximates the nearest-neighbor behavior of the vector store closely
     enough for the labeled trials, where retrieval quality affects the prompt
     but is not itself under measurement.
     """

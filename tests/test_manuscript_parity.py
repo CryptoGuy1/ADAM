@@ -320,7 +320,7 @@ def test_sensor_variances_match_deposit():
     assert measured["min_paired"] >= 400, "variance needs real residual degrees of freedom"
 
 
-def test_fusion_favours_better_calibrated_sensor():
+def test_fusion_favors_better_calibrated_sensor():
     """Lower calibration variance must pull the estimate toward its reading."""
     readings = [
         SensorReading("good", 0.0, 1000.0, error_variance=1000.0),

@@ -47,7 +47,7 @@ class ADAMSystem(BaselineSystem):
     Two evaluation modes exist because two D1 runs are deposited. Under
     ``eval_mode="gated"`` an event that does not trigger never forms a crew
     (Section 3.1.1: routine sensing stays lightweight) and is scored NORMAL
-    without invoking the model; this is the deployed behaviour and reproduces
+    without invoking the model; this is the deployed behavior and reproduces
     D1_RawTrigger_Log. Under ``eval_mode="full_pipeline"`` every event runs
     the complete crew workflow regardless of the trigger, which is how the
     nine-system benchmark of Table 5 was produced; it reproduces the

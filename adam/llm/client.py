@@ -172,7 +172,7 @@ def deterministic_fallback(
 ) -> DecisionObject:
     """Threshold-only classification used when reasoning is unavailable.
 
-    This is the behaviour measured at F1 = 0.774 in Section 4.5.2 - materially
+    This is the behavior measured at F1 = 0.774 in Section 4.5.2 - materially
     below full ADAM, which is the point: the system stays available and says so
     in the trace rather than failing silently or fabricating a judgement.
 

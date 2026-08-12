@@ -9,15 +9,15 @@ Evaluates the sensitivity of the deterministic conflict-resolution rule
 Rule:
     a* = argmax_a ( lambda_1 * severity_norm(a) + lambda_2 * invtime_norm(a) )
 
-where severity and inverse timestamp are min-max normalised to [0, 1]
+where severity and inverse timestamp are min-max normalized to [0, 1]
 before the weighted sum is applied.
 
 The mechanism was never triggered during the 459-event live deployment,
 so this analysis is a synthetic stress test of the decision rule itself.
 It characterises how often the selected action changes as lambda_1 varies;
-it does NOT validate field behaviour of overlapping crews.
+it does NOT validate field behavior of overlapping crews.
 
-Two normalisation regimes are evaluated:
+Two normalization regimes are evaluated:
 
   (1) PAIRWISE  - min-max applied across the two competing candidates only,
                   which is the literal reading of the manuscript for a
@@ -38,7 +38,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Presentation settings shared with the other manuscript figures.
-BLUE = "#0072B2"    # Okabe-Ito, colour-vision-deficiency safe
+BLUE = "#0072B2"    # Okabe-Ito, color-vision-deficiency safe
 ORANGE = "#E69F00"
 INK = "#1a1a1a"
 plt.rcParams.update({
@@ -88,7 +88,7 @@ def generate_conflicts(n):
     return sev_a, sev_b, age_a, age_b
 
 
-def normalise_pairwise(x_a, x_b):
+def normalize_pairwise(x_a, x_b):
     """Min-max across the two candidates: larger -> 1, smaller -> 0."""
     lo = np.minimum(x_a, x_b)
     hi = np.maximum(x_a, x_b)
@@ -97,13 +97,13 @@ def normalise_pairwise(x_a, x_b):
     span_safe = np.where(tied, 1.0, span)
     na = (x_a - lo) / span_safe
     nb = (x_b - lo) / span_safe
-    # Ties normalise to equal value (0.5) rather than an arbitrary 0/1 split
+    # Ties normalize to equal value (0.5) rather than an arbitrary 0/1 split
     na = np.where(tied, 0.5, na)
     nb = np.where(tied, 0.5, nb)
     return na, nb
 
 
-def normalise_window(x_a, x_b, lo, hi):
+def normalize_window(x_a, x_b, lo, hi):
     """Min-max against a fixed population range."""
     span = hi - lo
     return (x_a - lo) / span, (x_b - lo) / span
@@ -150,14 +150,14 @@ def run():
 
     results = {}
 
-    # ---- Regime 1: pairwise normalisation ----
-    ps_a, ps_b = normalise_pairwise(sev_a, sev_b)
-    pi_a, pi_b = normalise_pairwise(inv_a, inv_b)
+    # ---- Regime 1: pairwise normalization ----
+    ps_a, ps_b = normalize_pairwise(sev_a, sev_b)
+    pi_a, pi_b = normalize_pairwise(inv_a, inv_b)
 
-    # ---- Regime 2: window-population normalisation ----
-    ws_a, ws_b = normalise_window(sev_a, sev_b, SEV_MIN, SEV_MAX)
+    # ---- Regime 2: window-population normalization ----
+    ws_a, ws_b = normalize_window(sev_a, sev_b, SEV_MIN, SEV_MAX)
     inv_lo, inv_hi = 1.0 / AGE_MAX, 1.0 / AGE_MIN
-    wi_a, wi_b = normalise_window(inv_a, inv_b, inv_lo, inv_hi)
+    wi_a, wi_b = normalize_window(inv_a, inv_b, inv_lo, inv_hi)
 
     for name, (sa, sb, ia, ib) in {
         "pairwise": (ps_a, ps_b, pi_a, pi_b),
@@ -233,7 +233,7 @@ def report(results):
     print("=" * 74)
 
     for name, r in results.items():
-        print(f"\n--- {name.upper()} NORMALISATION ---")
+        print(f"\n--- {name.upper()} NORMALIZATION ---")
         print(f"contested conflicts (severity vs recency disagree): "
               f"{r['frac_contested']*100:.1f}%")
         print(f"decisions identical to lambda_1=0.70 over: "
@@ -244,7 +244,7 @@ def report(results):
             print(f"flip thresholds lambda*: min={r['lam_star'].min():.3f}  "
                   f"median={np.median(r['lam_star']):.3f}  "
                   f"max={r['lam_star'].max():.3f}")
-            print(f"contested conflicts resolved in favour of severity "
+            print(f"contested conflicts resolved in favor of severity "
                   f"at lambda_1=0.70: {r['sev_wins_at_070']*100:.1f}%")
 
         a = r["agreement"]
@@ -258,7 +258,7 @@ def report(results):
 def make_figure(results, path):
     """Two-panel sensitivity figure, styled to match the other manuscript figures.
 
-    No panel titles: the description belongs in the caption. Colours are the
+    No panel titles: the description belongs in the caption. Colors are the
     Okabe-Ito pair used throughout, so the section reads as one document.
     """
     fig, axes = plt.subplots(1, 2, figsize=(15.5, 6.0))
@@ -266,9 +266,9 @@ def make_figure(results, path):
     # Panel (a): agreement against lambda_1
     ax = axes[0]
     ax.plot(LAMBDA_GRID, results["window"]["agreement"] * 100,
-            lw=2.4, color=BLUE, label="Window normalisation", zorder=3)
+            lw=2.4, color=BLUE, label="Window normalization", zorder=3)
     ax.plot(LAMBDA_GRID, results["pairwise"]["agreement"] * 100,
-            lw=2.4, ls="--", color=ORANGE, label="Pairwise normalisation",
+            lw=2.4, ls="--", color=ORANGE, label="Pairwise normalization",
             zorder=3)
     ax.axvline(LAMBDA_PAPER, color="#4d4d4d", lw=1.2, ls=":", zorder=2)
     ax.text(LAMBDA_PAPER + 0.02, 6, r"$\lambda_1=0.7$", fontsize=14,

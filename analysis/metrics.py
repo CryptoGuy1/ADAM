@@ -431,7 +431,7 @@ def format_table5(rows: Sequence[Dict[str, object]], n_trials: int = 10) -> str:
     lines.append("")
     lines.append(
         f"* p_exact is at the Wilcoxon floor for n={n_trials} ({floor:.6f}); "
-        f"every trial favours the reference. The floor reflects sample size, "
+        f"every trial favors the reference. The floor reflects sample size, "
         f"not effect magnitude."
     )
     lines.append(

@@ -13,7 +13,7 @@ DATA ?= data/artifacts/d1_deposit.csv
 FIXTURE := data/artifacts/d1_simulated.csv
 RESULTS ?= results
 
-.PHONY: help install test verify fixture export-data offline reproduce trials \
+.PHONY: help install test verify verify-manuscript fixture export-data offline reproduce trials \
         trials-gated deployment scalability security conflict figures contracts \
         clean appendix
 

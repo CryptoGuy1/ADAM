@@ -26,3 +26,9 @@ keywords:
 license: MIT
 version: 1.0.0
 date-released: 2026-07-25
+repository-code: "https://github.com/CryptoGuy1/ADAM"
+license: MIT
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.21892655
+    description: "Evaluation dataset (D1 labeled trials and D2 deployment traces)"

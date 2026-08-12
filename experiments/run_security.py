@@ -22,7 +22,7 @@ These probe specific, bounded failure modes on a four-node testbed. They are not
 a security evaluation of a production DePIN deployment, and Section 5.4 is
 explicit that node-level physical compromise and sustained adversarial pressure
 at scale remain untested. The numbers below characterize a prototype's
-behaviour under four scripted attacks.
+behavior under four scripted attacks.
 
 Usage
 -----

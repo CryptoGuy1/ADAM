@@ -10,7 +10,7 @@ Why this is analytic rather than empirical
 Equation (5) never fired during the 459 deployment events: with four nodes
 there were no overlapping crew jurisdictions to arbitrate. The rule is retained
 for larger deployments, so its weighting is examined by generating synthetic
-conflicts rather than by measuring field behaviour. Section 4.6 says exactly
+conflicts rather than by measuring field behavior. Section 4.6 says exactly
 this, and the distinction matters - these figures characterize a mechanism, not
 an observation.
 
@@ -73,8 +73,8 @@ class SweepResult:
     #: Widest interval over which agreement stays >= the reporting threshold
     stable_interval: Tuple[float, float]
     agreement_threshold: float
-    #: Contested conflicts resolved in favour of severity at the configured value
-    severity_favoured_fraction: float
+    #: Contested conflicts resolved in favor of severity at the configured value
+    severity_favored_fraction: float
     flip_thresholds: List[float]
 
     def to_dict(self) -> Dict[str, object]:
@@ -189,7 +189,7 @@ def run_sweep(
         best = (lo, hi)
 
     # Among contested conflicts, how often does severity win at the configured
-    # weight? A contested pair resolves in favour of severity precisely when
+    # weight? A contested pair resolves in favor of severity precisely when
     # the configured lambda_1 sits above that pair's flip threshold.
     severity_wins = sum(1 for ft in flips if configured_lambda > ft)
 
@@ -201,7 +201,7 @@ def run_sweep(
         agreement_curve=curve,
         stable_interval=best,
         agreement_threshold=agreement_threshold,
-        severity_favoured_fraction=(severity_wins / contested if contested else 0.0),
+        severity_favored_fraction=(severity_wins / contested if contested else 0.0),
         flip_thresholds=flips,
     )
 
@@ -216,8 +216,8 @@ def report(result: SweepResult, configured_lambda: float = LAMBDA_SEVERITY) -> s
         f"{1 - result.contested_fraction:.1%}",
         f"  stable interval at >= {result.agreement_threshold:.0%} agreement: "
         f"[{result.stable_interval[0]:.3f}, {result.stable_interval[1]:.3f}]",
-        f"  contested conflicts favouring severity at lambda_1={configured_lambda}: "
-        f"{result.severity_favoured_fraction:.1%}",
+        f"  contested conflicts favoring severity at lambda_1={configured_lambda}: "
+        f"{result.severity_favored_fraction:.1%}",
     ]
     if result.flip_thresholds:
         uniq = set(round(x, 6) for x in result.flip_thresholds)

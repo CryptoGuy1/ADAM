@@ -111,7 +111,7 @@ def poisoning(path: str) -> Dict[str, Any]:
 
 
 def model_failure(path: str) -> Dict[str, Any]:
-    """Table 9 and Figure 8(b): fallback behaviour under model termination."""
+    """Table 9 and Figure 8(b): fallback behavior under model termination."""
     import pandas as pd
 
     llm = pd.read_excel(path, sheet_name="11_Security_LLM_Failure", header=2)

@@ -13,10 +13,19 @@ PoA).
 
 Python 3.9+, Node 18+ for the contracts, Docker for Weaviate.
 
+Create and activate a virtual environment first, then install into it. Installing
+into a system or conda base environment can upgrade shared packages (notably
+NumPy) in place and break other tools that depend on them.
+
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 npm install
 ```
+
+Every command below assumes the environment is active. To leave it, run
+`deactivate`; to remove it entirely, delete the `.venv` directory.
 
 ## Quick start
 
@@ -140,10 +149,10 @@ tests/                    parity suite
 * **D2**, 459 deployment coordination events with six per-stage latencies each,
   446 of which completed end to end within the 30-second deadline.
 
-Also deposited at <https://doi.org/10.21227/hyqx-bn32>.
+Also deposited on Zenodo at <https://doi.org/10.5281/zenodo.21892655> (CC BY 4.0).
 
 ```
-sha256  9a9e1e77eb87e9a45743e95e662d3bc8226ab19d572e2cfc0d5715ef4fd9af28
+sha256  1903dedc73d0a862bd8cacb64f7a32ebac7d00d413024f84c50370d3de5a188e
 ```
 
 Two things to know when working with D1.

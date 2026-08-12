@@ -45,7 +45,7 @@ plt.rcParams.update({
     "ps.fonttype": 42,
 })
 
-# Okabe-Ito, the reference palette for colour-vision deficiency. These three
+# Okabe-Ito, the reference palette for color-vision deficiency. These three
 # hues stay separable under deuteranopia, protanopia and tritanopia, which
 # together cover the large majority of CVD, and they also survive greyscale
 # conversion because their luminances differ.
@@ -147,13 +147,13 @@ def figure4(t: pd.DataFrame, out: str) -> None:
     f1_sd = [stats(t, s)["F1_sd"] for s in ORDER]
 
     # ADAM, then baselines, then ablations.
-    colours = [BLUE] + [ORANGE] * 4 + [GREEN] * 4
+    colors = [BLUE] + [ORANGE] * 4 + [GREEN] * 4
     x = np.arange(len(ORDER))
     labels = [LABEL[s] for s in ORDER]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(17.5, 7.4))
 
-    ax1.bar(x, lat, yerr=lat_sd, color=colours, edgecolor=INK, linewidth=0.9,
+    ax1.bar(x, lat, yerr=lat_sd, color=colors, edgecolor=INK, linewidth=0.9,
             capsize=5, width=0.66, error_kw={"elinewidth": 1.2})
     for xi, v in zip(x, lat):
         ax1.text(xi, v + max(lat) * 0.035, f"{v:.2f}", ha="center",
@@ -167,7 +167,7 @@ def figure4(t: pd.DataFrame, out: str) -> None:
     ax1.text(-0.055, 1.04, "(a)", transform=ax1.transAxes,
              fontsize=19, fontweight="bold")
 
-    ax2.bar(x, f1, yerr=f1_sd, color=colours, edgecolor=INK, linewidth=0.9,
+    ax2.bar(x, f1, yerr=f1_sd, color=colors, edgecolor=INK, linewidth=0.9,
             capsize=5, width=0.66, error_kw={"elinewidth": 1.2})
     for xi, v in zip(x, f1):
         ax2.text(xi, v + 0.006, f"{v:.3f}", ha="center",
@@ -301,7 +301,7 @@ def figure6(path: str, out: str) -> None:
     ax1.text(-0.11, 1.03, "(a)", transform=ax1.transAxes, fontsize=19,
              fontweight="bold")
 
-    # (b) compute profile. Axis colours identify which series belongs to which
+    # (b) compute profile. Axis colors identify which series belongs to which
     # scale, so the legend does not need "left"/"right" labels.
     w = 0.36
     ax2.bar(x - w / 2, cpu, yerr=cpu_sd, width=w, color=BLUE,
