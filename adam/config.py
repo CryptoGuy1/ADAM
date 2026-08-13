@@ -162,8 +162,13 @@ MQ4_RANGE_PPM: Tuple[float, float] = (300.0, 10_000.0)
 #: Sensor sampling rate, Hz. Table 4.
 SAMPLING_RATE_HZ: float = 1.0
 
-#: Reference (ground-truth) electrochemical sensor accuracy. Table 4.
-REFERENCE_ACCURACY: float = 0.02
+#: Reference (ground-truth) NDIR analyzer specification. Table 4.
+#: Accuracy is quoted on a full-scale basis, so the absolute tolerance is
+#: REFERENCE_FULL_SCALE_PPM * REFERENCE_ACCURACY_FS and is constant across
+#: the range, not proportional to the reading.
+REFERENCE_FULL_SCALE_PPM: float = 2_000.0
+REFERENCE_ACCURACY_FS: float = 0.01
+REFERENCE_TOLERANCE_PPM: float = REFERENCE_FULL_SCALE_PPM * REFERENCE_ACCURACY_FS
 
 #: Per-sensor error-variance range, ppm^2. Section 3.2.2.
 #: Estimated from residuals of each node's raw instantaneous reading against

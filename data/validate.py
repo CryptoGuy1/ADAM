@@ -21,7 +21,7 @@ way past it is a dataset that does not have the defect.
 
 What a sound D1 looks like
 --------------------------
-Labels come from the electrochemical reference sensor (Table 4, +/-2%),
+Labels come from the NDIR reference analyzer (Table 4, +/-1% FS),
 which is a physically separate instrument from the MQ-4 units under evaluation.
 The MQ-4 readings carry drift, noise, and cross-sensitivity; the reference does
 not. Disagreement between them is the phenomenon the paper is about. Concretely,
@@ -172,7 +172,7 @@ def assert_labels_independent(
             f"F1 = {diag.implied_static_f1:.3f}, not the 0.790 reported in "
             "Table 5, and every margin over the rule- and tree-based baselines "
             "is void.\n\n"
-            "Labels must come from the electrochemical reference sensor "
+            "Labels must come from the NDIR reference analyzer "
             "(Table 4), independently of the MQ-4 readings under evaluation. "
             "If this dataset was derived by thresholding the MQ-4 channel, it "
             "is not a valid evaluation set - re-derive the labels from the "

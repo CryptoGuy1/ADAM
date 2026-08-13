@@ -30,7 +30,7 @@ from adam.config import (
     N_DEPLOYMENT_EVENTS,
     NODE_SCALING_FIT_HW,
     NODE_SCALING_FIT_SCALEOUT,
-    REFERENCE_ACCURACY,
+    REFERENCE_TOLERANCE_PPM,
     REFERENCE_STAGE_LATENCY_MS,
     SENSOR_ERROR_VARIANCE_RANGE_PPM2,
     THRESHOLD_PPM,
@@ -123,13 +123,13 @@ def test_node_scaling_exponents():
 def test_error_variance_exceeds_reference_tolerance():
     """The MQ-4 must be noisier than the instrument that labels it.
 
-    The reference is accurate to +/-2%, about 20 ppm at the 1,000 ppm screening
-    threshold, so any sensor variance below that is physically impossible.
+    The reference is accurate to +/-1% of its 2,000 ppm full scale, i.e. 20 ppm
+    across the range, so any sensor variance below that is physically impossible.
     """
     import math
 
     lo, hi = SENSOR_ERROR_VARIANCE_RANGE_PPM2
-    reference_sd = REFERENCE_ACCURACY * THRESHOLD_PPM
+    reference_sd = REFERENCE_TOLERANCE_PPM
     assert math.sqrt(lo) > reference_sd, (
         f"MQ-4 sd {math.sqrt(lo):.1f} ppm is below the reference tolerance "
         f"{reference_sd:.1f} ppm, which is physically implausible"

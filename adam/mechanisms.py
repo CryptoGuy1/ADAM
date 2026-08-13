@@ -104,8 +104,9 @@ def fuse_readings(
 
         m_bar_t = sum_i (w_i * m_t^i) / sum_i w_i,   w_i = 1 / sigma_i^2
 
-    where sigma_i^2 is the calibration-error variance of sensor i, estimated
-    from the two-point calibration performed before each run (Section 3.2.2).
+    where sigma_i^2 is the error variance of sensor i, estimated once from the
+    residuals between each node's raw readings and the co-located NDIR
+    reference across the labeled trials (Section 3.2.2).
 
     Parameters
     ----------

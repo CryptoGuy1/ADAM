@@ -225,11 +225,18 @@ class ADAMNode:
         if sampler:
             sampler.start()
 
+        required_stores: List[str] = []
+        if self.chain is not None and self.config.enable_blockchain:
+            required_stores.append("blockchain")
+        if self.memory is not None and self.config.enable_weaviate:
+            required_stores.append("weaviate")
+
         trace = EventTrace(
             event_id=event.event_id,
             timestamp=event.timestamp,
             trigger_node=event.trigger_node,
             trigger_ppm=event.trigger_ppm,
+            required_stores=required_stores,
         )
 
         # -- crew formation (T_form)
@@ -294,17 +301,22 @@ class ADAMNode:
             trace.quorum_achieved = outcome.quorum_achieved
             trace.governance_reason = outcome.reason
 
-            # -- action selection
+            # -- action selection (Algorithm 1 line 17); execution is withheld
+            # until the trace commits, so nothing is marked executed here.
             if outcome.approved:
                 trace.final_action = decision.recommended_action
-                trace.executed = True
             else:
-                resolved = self._resolve(event, decision)
-                trace.final_action = resolved
-                trace.executed = False
-                trace.conflict_resolved = True
+                # A rejection is not a conflict: Equation (5) arbitrates between
+                # competing concurrent recommendations, of which there is only
+                # one here. The safe fallback records what would have been done
+                # without executing it.
+                trace.final_action = self._safe_fallback_action(event, decision)
+            trace.executed = False
 
-            # -- persistence (T_bc)
+            # -- persistence (T_bc), Algorithm 1 line 22. Commit precedes
+            # execution: an event whose trace cannot be committed within the
+            # deadline withholds its action rather than acting unaudited
+            # (Section 3.2).
             with timer.stage("T_bc"):
                 if self.chain is not None and self.config.enable_blockchain:
                     tx = self.chain.log_decision(event, decision, trace.final_action, outcome)
@@ -312,6 +324,25 @@ class ADAMNode:
                     trace.persisted_chain = tx is not None
                 if self.memory is not None and self.config.enable_weaviate:
                     trace.persisted_weaviate = self.memory.persist_trace(trace)
+
+            # -- execution (Algorithm 1 lines 23-27). Released only when the
+            # crew approved, every enabled store acknowledged the commit, and
+            # the end-to-end budget still holds.
+            if outcome.approved:
+                acknowledged = self._commit_acknowledged(trace)
+                on_time = timer.total_ms / 1000.0 <= self.config.decision_deadline_s
+                if acknowledged and on_time:
+                    trace.executed = True
+                else:
+                    trace.failure_stage = (
+                        "blockchain_commit" if not acknowledged else "deadline"
+                    )
+                    logger.warning(
+                        "event %s approved but withheld: acknowledged=%s on_time=%s",
+                        event.event_id, acknowledged, on_time,
+                    )
+            else:
+                trace.failure_stage = "governance_rejected"
 
         finally:
             crew.dissolve()
@@ -331,6 +362,32 @@ class ADAMNode:
                 self.config.decision_deadline_s,
             )
         return trace
+
+    def _safe_fallback_action(
+        self, event: CrewEvent, decision: DecisionObject
+    ) -> str:
+        """Action recorded when governance or quorum rejects the proposal.
+
+        Distinct from Equation (5): no competing recommendation exists on this
+        path, so there is nothing to arbitrate. The action is recorded for the
+        audit trace only and is never executed.
+        """
+        return self._resolve(event, decision)
+
+    def _commit_acknowledged(self, trace: EventTrace) -> bool:
+        """True when every enabled audit store acknowledged the trace commit.
+
+        Ablations disable a store deliberately (Section 3.4.5), so a disabled
+        backend cannot withhold execution; only an enabled backend that fails
+        to acknowledge does.
+        """
+        if self.chain is not None and self.config.enable_blockchain:
+            if not trace.persisted_chain:
+                return False
+        if self.memory is not None and self.config.enable_weaviate:
+            if not trace.persisted_weaviate:
+                return False
+        return True
 
     # -- Equation (5) ------------------------------------------------------
 

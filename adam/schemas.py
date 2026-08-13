@@ -39,7 +39,7 @@ from .config import (
 class SensorReading:
     """One MQ-4 sample from one node.
 
-    ``reference_ppm`` carries the electrochemical ground truth where available
+    ``reference_ppm`` carries the NDIR reference ground truth where available
     (labeled trials only). It is never visible to any agent - it exists solely
     for scoring, and the loader in ``data/loader.py`` enforces that separation.
     """
@@ -351,21 +351,37 @@ class EventTrace:
     blockchain_tx: Optional[str] = None
     persisted_weaviate: bool = False
     persisted_chain: bool = False
+    #: Stage at which the pipeline withheld execution, when it did. Mirrors the
+    #: failure taxonomy reported for the deployment events (Section 4.2).
+    failure_stage: Optional[str] = None
+    #: Audit stores this configuration was required to commit to. Ablations
+    #: disable a store deliberately (Section 3.4.5), so a disabled backend is
+    #: not required and cannot make a trace incomplete.
+    required_stores: List[str] = field(default_factory=list)
 
     def is_complete(self) -> bool:
-        """True when all five tuple elements were recorded.
+        """True when all five tuple elements were recorded and committed.
 
-        This is the trace-persistence predicate. A trace that reached a final
-        action but failed to persist to either store does not count.
+        This is the trace-persistence predicate of Section 3.4.3: the tuple
+        must be recorded across every audit store this configuration requires,
+        not merely one of them. Ablations that disable a store list only the
+        stores that remain, so a deliberately disabled backend cannot make a
+        trace incomplete.
         """
-        return (
+        tuple_recorded = (
             bool(self.trigger_node)
             and self.fused_ppm is not None
             and self.decision is not None
             and self.governance_valid is not None
             and self.final_action is not None
-            and (self.persisted_weaviate or self.persisted_chain)
         )
+        if not tuple_recorded:
+            return False
+        committed = {
+            "blockchain": self.persisted_chain,
+            "weaviate": self.persisted_weaviate,
+        }
+        return all(committed.get(s, False) for s in self.required_stores)
 
     def within_deadline(self, deadline_s: float) -> bool:
         """True when T_decision met constraint C1."""
@@ -408,7 +424,7 @@ class LabeledEvent:
     """One scored event from a D1 trial.
 
     ``label`` is the reference-sensor ground truth. It MUST be derived from the
-    electrochemical reference, never from the MQ-4 reading crossing a threshold
+    NDIR reference, never from the MQ-4 reading crossing a threshold
     - see ``data/validate.py``, which refuses to load a dataset whose labels are
     a deterministic function of the screening rule.
     """

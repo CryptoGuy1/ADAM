@@ -42,7 +42,7 @@ S = lambda s, c: (tr[tr.System == s][c].mean(), tr[tr.System == s][c].std(ddof=1
 TABLE4 = {  # system: (P, R, F1, FAR)
     "ADAM_Full": (0.901, 0.891, 0.896, 0.080),
     "Static_Threshold": (0.795, 0.786, 0.790, 0.165),
-    "Random_Forest": (0.948, 0.730, 0.825, 0.033),
+    "Random_Forest": (0.860, 0.824, 0.841, 0.110),
     "Cloud_Only": (0.904, 0.899, 0.901, 0.078),
     "SingleAgent": (0.881, 0.830, 0.855, 0.092),
     "ADAM_NoAgg": (0.889, 0.851, 0.869, 0.087),
@@ -131,6 +131,21 @@ fday = done.groupby("Day")["T_form_ms"].mean()
 chk("4.2 per-day formation span (ms)", fday.max() - fday.min(), 9, 1.5)
 lday = done.groupby("Day")["T_decision_total_ms"].mean()
 chk("4.2 per-day latency span (ms)", lday.max() - lday.min(), 80, 15)
+
+# Trigger publication: t_trigger -> first role acknowledgement (Sections 3.1.2, 4.2).
+pub = (done["t_sensor_join"] - done["t_trigger"]).dt.total_seconds() * 1e3
+chk("4.2 publication mean (ms)", pub.mean(), 472, 1)
+chk("4.2 publication sd (ms)", pub.std(ddof=1), 267, 1)
+chk("4.2 publication median (ms)", pub.median(), 439, 1)
+chk("4.2 publication P95 (ms)", np.percentile(pub, 95), 1005, 2)
+chk("4.2 publication share of T_form (%)", pub.mean() / tf.mean() * 100, 22.7, 0.1)
+chk("4.2 publication share of budget (%)",
+    pub.mean() / done["T_decision_total_ms"].mean() * 100, 2.5, 0.1)
+
+# Deployment window: the run spans three calendar days, not 72 h (Section 3.4.3).
+span_h = (co["Timestamp"].max() - co["Timestamp"].min()).total_seconds() / 3600
+chk("3.4.3 coordination span (h)", span_h, 56.7, 0.1)
+chk("4.3 event rate (per h)", len(co) / span_h, 8.1, 0.05)
 td = done["T_decision_total_ms"]
 chk("4.2 decision mean (s)", td.mean() / 1e3, 18.99, 0.01)
 chk("4.2 decision median (s)", td.median() / 1e3, 19.00, 0.01)

@@ -172,6 +172,16 @@ def summarize_deployment(
     within = sum(1 for t in traces if t.within_deadline(deadline_s))
     degraded = sum(1 for t in traces if t.degraded_mode)
     executed = sum(1 for t in traces if t.executed)
+    # Per-store commit outcomes are reported separately from completion so that
+    # trace persistence is auditable rather than inferred from the completion
+    # flag alone (Section 3.4.6). The 2025 deployment predates this breakdown.
+    chain_ok = sum(1 for t in traces if t.persisted_chain)
+    weaviate_ok = sum(1 for t in traces if t.persisted_weaviate)
+    required = sorted({s for t in traces for s in t.required_stores})
+    withheld = {}
+    for t in traces:
+        if t.failure_stage:
+            withheld[t.failure_stage] = withheld.get(t.failure_stage, 0) + 1
 
     sorted_totals = sorted(totals)
     return {
@@ -185,6 +195,10 @@ def summarize_deployment(
         },
         "stages": stage_summary,
         "trace_persistence": complete / len(traces),
+        "required_stores": required,
+        "persisted_chain_fraction": chain_ok / len(traces),
+        "persisted_weaviate_fraction": weaviate_ok / len(traces),
+        "withheld_by_stage": withheld,
         "within_deadline": within / len(traces),
         "degraded_fraction": degraded / len(traces),
         "executed_fraction": executed / len(traces),
