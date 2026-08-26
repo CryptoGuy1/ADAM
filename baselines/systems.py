@@ -70,7 +70,9 @@ class BaselineSystem:
 class StaticThreshold(BaselineSystem):
     """The fixed screening rule applied directly to MQ-4 readings.
 
-    Section 4.1 reports F1 = 0.790 at FAR = 0.166 - the high false-alarm rate
+    Section 4.1 reports F1 = 0.790 at FAR = 0.165, the mean of the per-trial
+    rates; pooled over all 2,000 events the rate is 182/1,100 = 0.166. The high
+    false-alarm rate
     reflecting sensitivity to drift and changing background conditions. This is
     the failure mode the rest of the system exists to address.
     """

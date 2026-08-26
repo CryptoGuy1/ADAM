@@ -22,7 +22,7 @@ Every artifact it writes carries ``"source": "simulated"`` in its manifest, and
 label simulated output as a paper reproduction.
 
 Reproducing the paper requires the deposited data:
-    https://doi.org/10.21227/hyqx-bn32
+    https://doi.org/10.5281/zenodo.21892654
 """
 
 from __future__ import annotations
@@ -282,9 +282,9 @@ class SimulationParams:
     sensor_noise_cv: float = 0.24
 
     #: Cross-sensitivity excursions (humidity, VOCs) that lift MQ-4 without any
-    #: real methane present - the mechanism behind the static baseline's 0.166 FAR.
+    #: real methane present - the mechanism behind the static baseline pooled 0.166 FAR (0.165 as a per-trial mean).
     #: These defaults place the fixture's static-threshold baseline near the
-    #: F1 = 0.790 / FAR = 0.166 operating point of Table 5, so the fixture
+    #: F1 = 0.790 / FAR = 0.165 (per-trial mean) operating point of Table 5, so the fixture
     #: exercises the same discrimination problem. It remains a fixture: matching
     #: the baseline's operating point is not reproducing the paper's results.
     interference_rate: float = 0.21

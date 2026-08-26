@@ -28,7 +28,8 @@ not. Disagreement between them is the phenomenon the paper is about. Concretely,
 a sound dataset shows:
 
   * MQ-4 above threshold on some reference-negative events (drift-driven false
-    positives - the 0.166 FAR of the static baseline)
+    positives - the pooled 0.166 FAR of the static baseline, reported as the
+    0.165 per-trial mean in Table 5)
   * MQ-4 below threshold on some reference-positive events (missed detections)
   * agreement between threshold rule and label well below 100%
 """

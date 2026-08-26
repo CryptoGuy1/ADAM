@@ -205,7 +205,7 @@ def summarize_deployment(
         "reference": {
             "mean_s": 18.9,
             "trace_persistence": 0.972,
-            "reason_share": 0.814,
+            "reason_share": 0.815,
         },
     }
 

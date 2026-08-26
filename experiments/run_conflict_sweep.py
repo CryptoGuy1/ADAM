@@ -102,16 +102,22 @@ def generate_conflicts(
 ) -> List[Tuple[Candidate, Candidate]]:
     """Generate synthetic conflict pairs. Section 4.6.
 
-    Severities are drawn from the Decision Agent schema levels; event ages are
-    drawn uniformly within the 30 s decision window, which is the interval over
-    which two crews could plausibly hold competing recommendations.
+    Severities are drawn from all five Decision Agent schema levels, NONE
+    included, because a crew may legitimately recommend no action; event ages
+    are drawn uniformly within the 30 s decision window, which is the interval
+    over which two crews could plausibly hold competing recommendations.
+
+    The published Appendix B figures come from ``scripts/conflict_sensitivity.py``,
+    which uses the same severity set and age bounds under a NumPy generator.
+    This module is an independent re-implementation; sampling noise aside, the
+    two agree.
     """
     rng = random.Random(seed)
-    levels = [v for k, v in SEVERITY_SCORES.items() if k != "NONE"]
+    levels = list(SEVERITY_SCORES.values())
     pairs: List[Tuple[Candidate, Candidate]] = []
     for i in range(n):
         sev_a, sev_b = rng.choice(levels), rng.choice(levels)
-        age_a, age_b = rng.uniform(0.1, window_s), rng.uniform(0.1, window_s)
+        age_a, age_b = rng.uniform(0.5, window_s), rng.uniform(0.5, window_s)
         pairs.append(
             (
                 Candidate(f"action_a_{i}", sev_a, -age_a, f"evt-a-{i}"),
