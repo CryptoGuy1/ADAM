@@ -22,7 +22,7 @@ Every artifact it writes carries ``"source": "simulated"`` in its manifest, and
 label simulated output as a paper reproduction.
 
 Reproducing the paper requires the deposited data:
-    https://doi.org/10.5281/zenodo.21892654
+    https://doi.org/10.5281/zenodo.21892655
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ from .validate import (
 
 logger = logging.getLogger(__name__)
 
-DEPOSIT_DOI = "https://doi.org/10.21227/hyqx-bn32"
+DEPOSIT_DOI = "https://doi.org/10.5281/zenodo.21892655"
 
 
 @dataclass
@@ -75,6 +75,24 @@ class Dataset:
     @property
     def trial_ids(self) -> List[int]:
         return sorted({e.trial_id for e in self.events})
+
+    @property
+    def min_concurrent_nodes(self) -> int:
+        return min((len(e.readings) for e in self.events), default=0)
+
+    @property
+    def max_concurrent_nodes(self) -> int:
+        return max((len(e.readings) for e in self.events), default=0)
+
+    def require_multinode(self, context: str, minimum: int = N_NODES) -> None:
+        """Fail closed when a fusion-dependent run lacks concurrent channels."""
+        if self.min_concurrent_nodes < minimum:
+            raise DatasetIntegrityError(
+                f"{context} requires at least {minimum} concurrent sensor readings "
+                f"per event; this dataset has as few as {self.min_concurrent_nodes}. "
+                "The workbook-derived CSV is primary-channel analysis data only; "
+                "use the original concurrent four-node D1 acquisition file."
+            )
 
     def trial(self, trial_id: int) -> List[LabeledEvent]:
         return [e for e in self.events if e.trial_id == trial_id]
@@ -433,10 +451,10 @@ def export_from_workbook(workbook_path: str, out_path: str) -> "Dataset":
     """Export D1 from the deposited workbook to the CSV the harnesses read.
 
     Reads 02_D1_Labeled_Events and writes one row per event with the primary
-    node's raw reading, its per-node error variance (recomputed from the
-    raw-versus-reference residuals of that node, as in Section 3.2.2), the
-    reference reading, and the reference-derived label. Provenance is recorded
-    as "deposit" so the analysis can label its outputs accordingly.
+    raw MQ-4 channel plus the NDIR reference/label. The workbook does not carry
+    the concurrent N1--N4 acquisition stream required to recompute fusion, so
+    this export is explicitly marked PRIMARY-CHANNEL ONLY and must not be fed
+    to fusion-dependent benchmark/substitution/degraded runners.
     """
     import pandas as pd
 
@@ -475,6 +493,11 @@ def export_from_workbook(workbook_path: str, out_path: str) -> "Dataset":
             "workbook": os.path.basename(workbook_path),
             "sheet": "02_D1_Labeled_Events",
             "doi": DEPOSIT_DOI,
+            "capabilities": {
+                "primary_channel_analysis": True,
+                "multinode_fusion": False,
+                "reason": "workbook sheet stores one MQ-4 reading per event",
+            },
         },
     )
     assert_labels_independent(ds.primary_ppm(), ds.labels(), THRESHOLD_PPM)
@@ -491,7 +514,7 @@ if __name__ == "__main__":  # pragma: no cover
     ap.add_argument("--check", metavar="CSV", help="run integrity checks on a D1 file")
     ap.add_argument(
         "--export", metavar="XLSX",
-        help="export D1 from the deposited workbook to the CSV the harnesses read",
+        help="export PRIMARY-CHANNEL D1 analysis data from the workbook (not fusion-capable)",
     )
     ap.add_argument("--out", default="data/artifacts/d1_simulated.csv")
     ap.add_argument("--seed", type=int, default=SEED)

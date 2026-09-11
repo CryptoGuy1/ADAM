@@ -1,213 +1,429 @@
-# ADAM: Agentic Decentralized Autonomous Machines
+# ADAM — Agentic Decentralized Autonomous Machines
 
-Reference implementation for:
+Reference implementation and analysis code for:
 
-> Nweke, B.C., Ramezan, G., Saraji, S. **Agentic Decentralized Autonomous Machines (ADAM): An Agentic AI Framework for Decentralized Physical Infrastructure Networks.** 2026.
+> **Agentic Decentralized Autonomous Machines (ADAM): Model-Flexible Edge Intelligence and Governance for DePIN Applications**
+> Benjamin C. Nweke, Gholamreza Ramezan, and Soheil Saraji (2026)
 
-A crew-based multi-agent framework for methane monitoring on a four-node
-Raspberry Pi 5 testbed, combining on-device LLM reasoning (Gemma 3 1B via
-Ollama), semantic memory (Weaviate), and blockchain governance (Fides Innova
-PoA).
+ADAM is an event-driven edge architecture that separates physical sensing,
+Decision-Agent reasoning, crew agreement, governance validation, and audit
+logging. The evaluated prototype uses four Raspberry Pi 5 methane-sensing nodes,
+local Gemma 3 1B inference through Ollama, shared semantic memory through
+Weaviate, and permissioned governance through the Fides Innova testnet.
+
+This repository is organized so a reviewer can trace:
+
+**manuscript claim → named experiment → implementation → saved output → metric calculation → table/figure**.
+
+## What is reproduced here
+
+Three evidence categories must be kept distinct.
+
+1. **Historical reported deployment evidence.** The deposited workbook contains
+   the 459-event deployment records, stage latencies, resource measurements,
+   security records, and the original benchmark prediction records used for many
+   reported quantities. The historical 446/459 value is an **end-to-end
+   completion rate**, not an independent measurement of dual-store persistence.
+
+2. **Workbook-backed recomputation.** `scripts/verify_manuscript_numbers.py`
+   recomputes the quantities the workbook supports, including the 11-system D1
+   benchmark, the Decision-Agent substitution study, the degraded-condition
+   trial summaries, deployment/resource/security quantities, and all three
+   multiplicity families. The current numbered data-driven figures are generated
+   directly from the same workbook. Deployment semantics are derived from the
+   frozen benchmark predictions rather than by rerunning the language model.
+
+3. **New/reference reruns.** Re-executing fusion-dependent experiments from raw
+   sensor inputs requires the original concurrent N1–N4 D1 acquisition stream.
+   The workbook preserves fused/dispersion features and deposited predictions or
+   trial results, but not the complete simultaneous four-node raw stream needed
+   to re-estimate fusion or recreate degraded perturbations from first principles.
+
+The code does not reconstruct missing historical sensor streams or present newly
+implemented reference behavior as proof of historical behavior.
+
+## Headline manuscript results
+
+The current manuscript reports:
+
+- ADAM_LLM benchmark-mode F1: **0.896**.
+- Static Threshold F1: **0.790**.
+- Random Forest (raw) F1: **0.841**.
+- Random Forest (fused) F1: **0.928**.
+- Gradient Boosting (fused) F1: **0.931**.
+- Decision-Agent substitution: ADAM_GBM reaches **0.950** mean F1.
+- Revised deployment semantics: **F1 0.830**, **FAR 0.066**.
+- Live deployment: **446/459 (97.2%)** events completed within the 30-s budget.
+- Completed-event median decision latency: approximately **19.0 s**.
+- Local reasoning accounts for approximately **81.5%** of mean completed-event
+  latency.
+
+Reported values are treated as evidence to be verified, not numerical targets to
+reverse-engineer in code.
 
 ## Requirements
 
-Python 3.9+, Node 18+ for the contracts, Docker for Weaviate.
+- Python 3.11 recommended
+- Node.js 18+ for Solidity/Hardhat tooling
+- Docker for the reference Weaviate service
+- Ollama with `gemma3:1b` for local-LLM runs
 
-Create and activate a virtual environment first, then install into it. Installing
-into a system or conda base environment can upgrade shared packages (notably
-NumPy) in place and break other tools that depend on them.
+Create an isolated environment before installing dependencies:
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
-npm install
+npm install --no-package-lock
 ```
 
-Every command below assumes the environment is active. To leave it, run
-`deactivate`; to remove it entirely, delete the `.venv` directory.
-
-## Quick start
-
-Runs offline: no hardware, API keys, or network access.
+## Fast integrity check
 
 ```bash
-python -m adam.config      # verify constants against the deposited dataset
-python -m pytest tests/ -q # 63 tests
-make offline               # trials, conflict sweep, security harnesses
+python -m adam.config
+python -m pytest tests/ -q
+python scripts/verify_manuscript_numbers.py data/ADAM_Dataset_Master.xlsx
 ```
 
-`python -m adam.config` compares every constant in `adam/config.py` against
-`data/ADAM_Dataset_Master.xlsx` and exits non-zero on any mismatch. Set
-`ADAM_DATASET` if the workbook lives elsewhere; without it the structural checks
-still run.
-
-## Full reproduction
+For the complete workbook-backed recomputation (checks, Appendix A, and current
+data-driven figures):
 
 ```bash
-# services
-docker compose up -d
-ollama serve &
-ollama pull gemma3:1b
-
-# contracts
-npx hardhat run scripts/deploy.js --network fides
-# export the ADAM_ADDR_* values the script prints
-
-make reproduce
+make recompute
 ```
 
-## The two D1 runs
+This is intentionally not described as physical re-execution. A current reference
+rerun from raw sensor inputs uses `make reference-rerun` and requires the missing
+concurrent four-node D1 stream plus the relevant runtime services.
 
-D1 is scored under two evaluation modes, both deposited, and the distinction
-matters for reading Table 5:
+The parity tests cover the active quorum rule, conflict rule, causal baseline,
+semantic-memory temporal filtering, Decision-Agent feature shape, deterministic
+deployment semantics, degraded-stream invariants, optional fold-local fusion
+calibration, deadline fail-closed behavior, and Python/Solidity governance-policy
+surfaces.
 
-* **Full pipeline** (`--eval-mode full_pipeline`). Every labeled event is
-  replayed through the complete crew workflow regardless of the trigger, so all
-  nine systems classify the same 2,000 events under identical conditions. This
-  is the benchmark behind Table 5 (ADAM F1 = 0.896) and corresponds to
-  `06A_Event_Predictions` in the workbook.
-* **Gated** (`--eval-mode gated`). Deployment semantics: a reading below the
-  1,000 ppm screening threshold never forms a crew and is classified normal on
-  a millisecond fast path; only triggered readings receive aggregation and
-  reasoning. This is the deployed operating point (F1 = 0.814) and corresponds
-  to `D1_RawTrigger_Log`.
+## D1 benchmark design
 
-The gap between the two is the cost of the screening gate: below the threshold
-nothing reaches the reasoner, so the gate caps recall while keeping sustained
-resource use within budget. The live deployment runner (`run_deployment.py`)
-is gated unconditionally.
+### Benchmark mode
+
+The main comparison evaluates every labeled D1 event through the configured
+system so the systems classify the same 2,000 events. The current benchmark
+family contains one reference plus ten comparators:
+
+- `adam_llm`
+- `static_threshold`
+- `random_forest_raw`
+- `random_forest_fused`
+- `gradient_boosting_fused`
+- `cloud_only`
+- `single_agent`
+- `adam_no_aggregator`
+- `adam_no_llm`
+- `adam_no_blockchain`
+- `adam_no_weaviate`
+
+The ten paired comparisons against ADAM_LLM form the benchmark Holm family.
+
+### Deployment semantics
+
+The revised manuscript does **not** run Gemma a second time under a gate.
+Deployment-semantics predictions are a deterministic transform of the frozen
+benchmark predictions:
+
+```text
+raw MQ-4 >= 1000 ppm  -> preserve benchmark ADAM_LLM prediction exactly
+raw MQ-4 <  1000 ppm  -> NORMAL; no crew/model invocation
+```
+
+This isolates the effect of screening from language-model stochasticity.
 
 ```bash
-make trials        # full-pipeline benchmark      -> Table 5
-make trials-gated  # gated operating point        -> D1_RawTrigger_Summary
+python scripts/derive_deployment_semantics.py \
+  --data data/artifacts/d1_primary_channel.csv \
+  --benchmark results/trials/predictions_adam_llm.jsonl \
+  --out results/trials/predictions_adam_deployment_semantics.jsonl
 ```
 
-## Repository layout
+Using the deposited frozen benchmark predictions, this derivation reproduces the
+current manuscript operating point of approximately precision 0.904, recall
+0.767, F1 0.830, and FAR 0.066.
 
+## Fusion calibration
+
+The reported D1 benchmark uses the fixed inverse-variance sensor weights preserved
+in the deposited event records. Those weights were estimated once from the
+labeled calibration data and therefore allow a held-out trial to contribute
+indirectly to the pooled weight estimate; the manuscript discloses this as a
+limitation.
+
+`data/calibration.py` implements an optional fold-local sensitivity analysis in
+which each held-out trial receives weights estimated only from the other nine
+trials. A complete numerical re-fusion under those fold-local weights requires
+the original concurrent N1–N4 acquisition stream, which is not preserved in the
+workbook. The reference runners expose this behavior through
+`--fold-local-calibration`; it is not presented as the historical reported run.
+
+## Decision-Agent substitution study
+
+The substitution study keeps the ADAM crew runtime fixed while changing the
+reasoner assigned to the Decision Agent.
+
+Standalone / in-crew pairs are:
+
+- Static Threshold / ADAM_Static
+- Gemma 3 1B / ADAM_LLM
+- Logistic Regression / ADAM_LogReg
+- Random Forest / ADAM_RF
+- Gradient Boosting / ADAM_GBM
+
+The fitted standalone contextual models and the corresponding in-crew Decision Agents use the same eight features:
+
+1. raw concentration
+2. normalized threshold distance
+3. threshold indicator
+4. fused concentration
+5. cross-node dispersion
+6. causal six-reading baseline mean
+7. fused / baseline ratio
+8. fused − baseline difference
+
+Holding the representation fixed means the fitted standalone/in-crew comparison
+does not obtain its crew gain by silently changing the classifier input features.
+The surrounding crew adds coordination, retrieval, voting, governance, and trace
+handling while the substituted fitted reasoner consumes the same contextual
+feature vector.
+
+```bash
+python -m experiments.run_decision_agent_substitution \
+  --data data/d1_four_node.csv \
+  --main-results results/trials \
+  --out results/decision_agent_substitution
 ```
+
+The runner executes substituted fitted backends through `ADAMNode.handle_event`;
+there is no special shortcut decision path.
+
+## Degraded-condition study
+
+`experiments/degraded_harness.py` applies perturbations to the raw per-node MQ-4
+stream **before fusion and feature construction**. The NDIR reference and labels
+are unchanged.
+
+Conditions are:
+
+- clean control
+- mild drift
+- strong drift
+- measurement noise plus sparse impulses
+- N4 dropout beginning approximately one third into the trial
+
+Seeds are derived from `(condition, trial)`, never from the system being tested.
+Each emitted condition–trial stream is SHA-256 hashed. Under dropout, N4 is
+excluded; no stale N4 value is substituted, and fusion renormalizes over the
+surviving nodes.
+
+```bash
+python experiments/degraded_harness.py --selftest
+python experiments/degraded_harness.py \
+  --input path/to/per_node_d1.csv \
+  --outdir results/degraded_inputs
+```
+
+The workbook preserves the reported per-trial degraded-condition outcomes and
+supports recomputation of their tables, statistics, and figure. The original
+per-node D1 acquisition file is still required to recreate the perturbed sensor
+streams and re-run the study from raw measurements.
+
+## Semantic memory
+
+The shared memory service keeps two lifecycles separate:
+
+- `CrewEvent`: ephemeral active coordination state, cleared when the crew
+  dissolves.
+- `EventTrace`: resolved historical records available for semantic retrieval.
+
+Retrieval for event time `t` is causal: only records with `timestamp < t` are
+eligible. The reference benchmark does not manufacture semantic-memory records
+from training-fold labels.
+
+## Governance and conflict resolution
+
+Crew quorum is computed over voting agents:
+
+```text
+gamma_crew = floor(n_voters / 2) + 1
+```
+
+The Coordinator tallies and does not vote. In the deployed full crew there are
+three voters, so two approvals are required.
+
+The active conflict resolver is:
+
+```text
+higher severity wins;
+if severity is equal, the newer recommendation wins.
+```
+
+There is no active lambda-weighted conflict sweep.
+
+The Python `LocalValidator` and Solidity `GovernanceRules` expose the same
+policy surface: recognized severity, confidence floor, permitted action,
+critical-concentration passive-action rejection, CRITICAL human-review rule,
+and explicit degraded-mode recording. Offline/reference experiments use
+`LocalValidator`; a real Fides-backed run can pass the same
+`FidesInnovaClient` instance as both validator and ledger client so
+`GovernanceRules.validateDecision()` is evaluated through a read-only contract
+call before `DecisionLogger.logDecision()` commits the approved trace.
+
+## Deployment and persistence terminology
+
+For the historical D2 deployment, the workbook supports **end-to-end completion**
+over all 459 events. It does not preserve separate per-event acknowledgments for
+both audit stores, so 446/459 must not be relabeled as measured dual-store
+persistence reliability.
+
+New/reference traces contain explicit `persisted_chain` and
+`persisted_weaviate` fields. Those fields may be used to measure commit success
+for a new run, but they do not retroactively change the interpretation of the
+historical deployment.
+
+## Environment and provenance
+
+The reported deployment and reference-rerun environments are intentionally
+separated:
+
+- historical reported Weaviate: **1.21**
+- current reference Weaviate: **1.30.2**
+
+See `ENVIRONMENT.md`.
+
+Before a new/reference experiment, write a provenance manifest:
+
+```bash
+python scripts/run_manifest.py \
+  --dataset data/d1_four_node.csv \
+  --out results/<run>/run_manifest.json
+```
+
+The manifest records Git state, Python/packages, platform, dataset SHA-256,
+Ollama metadata when available, inference parameters, Docker version, Weaviate
+versions, chain ID, contract configuration presence, and Solidity source hashes.
+
+## Data
+
+The current public data record is:
+
+**Zenodo DOI: 10.5281/zenodo.21892655**
+
+The repository includes `data/ADAM_Dataset_Master.xlsx`. Its workbook export is
+explicitly **primary-channel only**:
+
+```bash
+make export-primary-data
+```
+
+That export is suitable for gate/label analyses such as deterministic deployment
+semantics. The master workbook itself also preserves the reported contextual
+fitted-model predictions/trial metrics, substitution results, and degraded-study
+trial summaries, so those reported analyses can be checked without reconstructing
+raw sensor streams. However, the primary-channel export is **not** sufficient to
+re-execute cross-node fusion, fitted contextual systems from raw N1–N4 readings,
+or degraded perturbations. Those raw reruns require the original concurrent
+four-node D1 stream.
+
+## Repository map
+
+```text
 adam/
-  config.py               operational constants and the parity check
-  manuscript.py           reference values recomputed from the dataset
-  schemas.py              DecisionObject, CrewEvent, EventTrace
-  mechanisms.py           Equations 1, 2, 4, 5
-  crew.py                 Algorithm 1
-  telemetry.py            per-stage timing, CPU accounting, egress ledger
-  agents/roles.py         Sensor, Aggregator, Decision, Coordinator
-  llm/prompt.py           prompt template; emits Appendix A
-  llm/client.py           Ollama client, format repair, deterministic fallback
-  memory/store.py         Weaviate CrewEvent and EventTrace classes
-  governance/chain.py     policy validation and PoA client
+  config.py                   constants and manuscript parity checks
+  manuscript.py               workbook-backed reference calculations
+  schemas.py                  SensorReading, DecisionObject, CrewEvent, EventTrace
+  mechanisms.py               trigger, fusion, quorum helpers, conflict rule
+  crew.py                     event lifecycle / ADAMNode.handle_event
+  agents/roles.py             Sensor, Aggregator, Decision, Coordinator
+  llm/prompt.py               runtime prompt + Appendix A generator
+  llm/client.py               Ollama inference, repair retry, fallback
+  memory/store.py             ephemeral coordination + causal semantic memory
+  governance/chain.py         policy validator and chain clients
 
-baselines/systems.py      Static Threshold, Random Forest, Cloud-Only, Single-Agent
-ablations/systems.py      full ADAM plus No-Aggregator, No-LLM, No-Blockchain, No-Weaviate
-analysis/metrics.py       confusion matrices, Wilcoxon, Holm correction
-data/                     loader, workbook exporter, label-integrity guard, simulator
-contracts/                GovernanceRules, CrewRegistry, DecisionLogger, ConsensusValidator
+data/
+  loader.py                   D1 loader, workbook primary-channel exporter, simulator
+  calibration.py              optional fold-local fusion-calibration sensitivity
+
+baselines/systems.py          raw and fused baselines, cloud and single-agent comparators
+ablations/systems.py          ADAM_LLM and architectural ablations
+
 experiments/
-  reproduce_security.py   recomputes Section 4.5 from the deposited records
-  run_trials.py           scores every system over D1 (both evaluation modes)
-  run_deployment.py       D2 replay and the node-count scaling harness
-  run_security.py         simulated attack harness (exercises the defences;
-                          does not reproduce the published numbers)
-  run_conflict_sweep.py   Section 4.6
+  run_trials.py               11-system D1 benchmark
+  run_decision_agent_substitution.py
+  decision_agent_backends.py
+  degraded_harness.py
+  run_deployment.py           reference replay / scaling harness
+  run_security.py             active security stress-test harness
+  reproduce_security.py       workbook-backed security recomputation
+
 scripts/
-  make_manuscript_figures.py  Figures 3-8 from the dataset
-  conflict_sensitivity.py     seeded sweep for Figure 9
-  verify_chain.py             checks deployment events against the ledger
-tests/                    parity suite
+  derive_deployment_semantics.py
+  verify_manuscript_numbers.py
+  run_manifest.py
+  deploy.js
+  verify_chain.py
+  figure3_confusion_matrices.py
+  figure4_operating_point.py
+  figure_swap_study.py
+  figure_degraded_conditions.py
+  figure5_coordination.py
+  figure6_resources.py
+  figure7_scalability.py
+  figure8_security.py
+
+contracts/
+  GovernanceRules.sol
+  CrewRegistry.sol
+  ConsensusValidator.sol
+  DecisionLogger.sol
+
+tests/
+  test_manuscript_parity.py
 ```
 
-## Paper to code
+## Manuscript ↔ code traceability
 
-| Paper | Code |
+| Manuscript element | Reference implementation |
 |---|---|
-| Eq. 1, trigger at 1,000 ppm | `mechanisms.trigger` |
-| Eq. 2, inverse-variance fusion | `mechanisms.fuse_readings` |
-| Eq. 3, local reasoning | `agents.roles.DecisionAgent.reason` |
-| Eq. 4, quorum floor(n/2)+1 over voters | `config.quorum`, `GovernanceRules.requiredQuorum` |
-| Eq. 5, conflict resolution | `mechanisms.resolve_conflict` |
-| Eq. 6, decision latency | `schemas.StageLatencies` |
-| Algorithm 1 | `crew.ADAMNode.handle_event` |
-| Table 5 | `analysis/metrics.build_table5` |
-| Table 7 | `manuscript.node_scaling_fit`, `simulator_validation` |
-| Table 8 | `config.quorum`, `tolerated_faults` |
-| Figures 3-8 | `scripts/make_manuscript_figures.py` |
-| Figure 9 | `scripts/conflict_sensitivity.py` |
-| Table 9, Figure 8 | `experiments/reproduce_security.py` |
+| Raw screening rule | `adam.mechanisms.trigger` |
+| Inverse-variance fusion | `adam.mechanisms.fuse_readings` |
+| Reported fixed fusion weights / fold-local sensitivity | event records; `data.calibration.calibrate_fold` |
+| Decision-Agent reasoning | `adam.agents.roles.DecisionAgent.reason` |
+| Crew quorum | `adam.config.quorum`, `contracts/GovernanceRules.sol` |
+| Severity/recency conflict rule | `adam.mechanisms.resolve_conflict` |
+| Full event workflow | `adam.crew.ADAMNode.handle_event` |
+| Main D1 benchmark | `experiments.run_trials` |
+| Deployment-semantics derivation | `scripts/derive_deployment_semantics.py` |
+| Decision-Agent substitution | `experiments.run_decision_agent_substitution` |
+| Degraded-input construction | `experiments/degraded_harness.py` |
+| Deployment/scaling reference replay | `experiments.run_deployment` |
+| Statistical metrics / Holm | `analysis.metrics` |
 | Appendix A | `python -m adam.llm.prompt --latex` |
+| Provenance manifest | `scripts/run_manifest.py` |
 
-## Datasets
+## Scope and limitations
 
-`data/ADAM_Dataset_Master.xlsx` holds both datasets:
-
-* **D1**, 10 trials of 200 labeled events (2,000 total; 900 anomaly, 1,100
-  normal). Labels derive from the co-located NDIR reference analyzer, never
-  from the MQ-4 readings under evaluation. Both D1 runs are recorded: the
-  full-pipeline predictions in `06A_Event_Predictions` and the trigger-gated
-  run in `D1_RawTrigger_Log`.
-* **D2**, 459 deployment coordination events with six per-stage latencies each,
-  446 of which completed end to end within the 30-second deadline.
-
-Also deposited on Zenodo at <https://doi.org/10.5281/zenodo.21892655> (CC BY 4.0).
-
-```
-sha256  1903dedc73d0a862bd8cacb64f7a32ebac7d00d413024f84c50370d3de5a188e
-```
-
-Two things to know when working with D1.
-
-**Both systems receive the same raw input.** The Static Threshold baseline is
-`Raw_Instantaneous_PPM` compared against 1,000 ppm (F1 = 0.790, FAR = 0.165),
-and the same raw sample is what gates ADAM's crew formation. `Start_PPM` and
-`End_PPM` describe the exposure profile of the event and are not detector input
-channels. Per-node error variances for Equation 2 come from residuals of the
-raw readings against the reference; on this testbed the four variances are
-closely matched, so the fusion weights are near uniform (ratio about 1.09).
-
-**`data/validate.py` rejects any D1 whose labels are recoverable from the
-screening rule**, and has no override. On the deposit, agreement between the
-raw threshold rule and the labels is 0.813, which is what leaves detection
-headroom above the fixed rule.
-
-## Scalability design
-
-The scalability study varies participating node count N while holding load
-fixed at the reference configuration (4 concurrent events, 8 sensor streams,
-4 logical workers, 30,000 vectors), so latency changes attribute to node
-count. N = 1-4 are physical Raspberry Pi 5 runs; N = 6, 8, 12, 16 come from a
-Python scale-out model validated against the matched N = 1-4 hardware runs
-(decision-latency MAPE 2.4%, bias below 0.1%). `08_Scalability_Log` flags every
-row with its `Run_Mode`, and `09_Fitted_Models` holds the fitted relations
-T(N) = T0 + alpha * N^beta for both domains.
-
-## Notes on scope
-
-* Four physical nodes, one gas species, one site, 72 hours.
-* Node counts above four are model-based scale-out, not hardware, and are
-  flagged per row in `08_Scalability_Log`.
-* The poisoning trial is underpowered at 7 to 8 events per level; no effect was
-  detectable (Fisher exact, p = 0.47).
-* Equation 5 never fired during the deployment. Section 4.6 characterises it
-  through the seeded sweep in `scripts/conflict_sensitivity.py`.
-* Quorum is computed over the agents that cast a ballot, not the agents in the
-  crew. The Coordinator tallies and does not vote, so a four-agent crew
-  supplies three ballots and the deployed threshold is quorum(3) = 2: any two
-  of the three role-specific checks must agree, no single voter can approve an
-  action alone, and one unavailable voter cannot block the other two. Two
-  colluding voters can supply quorum, which is the integrity bound Table 8
-  states. `config.DEPLOYED_VOTER_COUNT` records the voter count.
-* Table 8's bounds assume votes are attributable to distinct registered agents.
-* The ledger records what was decided and on what evidence, not whether the
-  measurement was true.
-* `mechanisms.fuse_readings` rejects an `outlier_z` at or above sqrt(n-1), which
-  is 1.732 for four nodes. Above that ceiling no reading can be flagged.
-* No per-decision dollar cost is reported for the Cloud-Only comparator: the
-  deposit contains no token or billing records. The measured comparison is
-  external egress (zero for ADAM in all 12 windows; about 117 KB and 19 API
-  calls per 30-minute window for Cloud-Only).
+- Four physical Raspberry Pi 5 nodes in one laboratory.
+- Co-located sensors observe the same controlled chamber exposure; this is not a
+  spatially distributed field deployment.
+- One gas species and a restricted experimental concentration range.
+- The approximately 19-s workflow is an early screening/accountability system,
+  not a certified emergency shutdown or ignition-protection mechanism.
+- Hardware node-count measurements end at N=4; larger node counts are model
+  predictions.
+- The targeted security tests are small stress tests, not claims of general
+  Byzantine or adversarial robustness.
+- Individual ballots are not cryptographically signed in the current prototype.
+- The ledger establishes what was proposed, validated, and recorded; it does not
+  prove that the physical sensor measurement was correct.
 
 ## License
 
-MIT for code (`LICENSE`), CC BY 4.0 for the datasets (`LICENSE-DATA`). Citation
-metadata in `CITATION.cff`.
+Code: MIT (`LICENSE`).
+Deposited data: CC BY 4.0 (`LICENSE-DATA`).

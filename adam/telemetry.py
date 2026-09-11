@@ -11,12 +11,12 @@ pass.
 
 CPU accounting
 --------------
-Table 6 reports *peak* CPU during active inference (94.7% for full ADAM).
-Constraint C2 governs *sustained* CPU, defined in Section 3.3 as the mean over
-the deployment cycle outside active-inference windows, on a rolling five-minute
-average. These are different quantities and conflating them is what makes the
-94.7% figure look like a C2 violation when it is not. :class:`ResourceSampler`
-reports peak; :class:`SustainedCPUMonitor` reports the C2 quantity.
+Table 6 reports the mean of per-window peak CPU utilization for sampled 60-s
+windows. Constraint C2 is evaluated on the sampled non-inference windows, while
+crew-active windows are reported separately. :class:`ResourceSampler` exposes
+the per-window measurements used by reference reruns;
+:class:`SustainedCPUMonitor` is a live runtime guard and is not used to reinterpret
+the deposited historical resource statistic.
 """
 
 from __future__ import annotations
@@ -229,12 +229,13 @@ class ResourceSampler:
 
 
 class SustainedCPUMonitor:
-    """Rolling-average CPU for constraint C2.
+    """Reference online CPU monitor for non-inference operation.
 
-    Section 3.3 defines sustained utilization as the deployment-cycle mean
-    outside active-inference windows, on a rolling five-minute average. Samples
-    taken while :meth:`inference_window` is held are excluded, which is exactly
-    what makes 94.7% peak and 22% sustained consistent with each other.
+    The manuscript's reported C2 statistic is recomputed from archived 60-s
+    resource windows as the mean of each window's maximum node-level CPU use.
+    This live monitor is a runtime guard only: it excludes marked inference
+    spans and maintains a rolling 60-s mean, so it must not be substituted for
+    the deposited C2 evidence.
     """
 
     def __init__(self, window_s: float = CPU_ROLLING_WINDOW_S, interval_s: float = 1.0):

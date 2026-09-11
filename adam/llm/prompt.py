@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from ..config import (
     CLASSIFICATION_VALUES,
     DECISION_SCHEMA_FIELDS,
+    PERMITTED_ACTIONS,
     SEVERITY_LEVELS,
     THRESHOLD_PPM,
 )
@@ -74,12 +75,13 @@ Emit exactly these seven fields:
   confidence             number in [0, 1]
   severity               {severities}
   reasoning              at most two sentences citing the specific evidence used
-  recommended_action     a short imperative phrase
+  recommended_action     exactly one permitted action: {actions}
   contributing_factors   array of at most 3 short strings
   requires_human_review  boolean
 
-Set requires_human_review to true when the evidence conflicts, the cross-node
-estimate is dispersed, or confidence is below 0.6.
+Set requires_human_review to true when confidence is below 0.6, when the
+cross-node dispersion exceeds half the fused estimate, or when severity is
+CRITICAL.
 
 Return ONLY the JSON object."""
 
@@ -94,6 +96,7 @@ severity must be one of {severities}.
 confidence must be a number between 0 and 1.
 requires_human_review must be true or false.
 contributing_factors must be an array of strings.
+recommended_action must be exactly one of: {actions}.
 
 Re-emit your assessment as ONLY a JSON object. No fences, no prose."""
 
@@ -112,7 +115,7 @@ EXAMPLE_OUTPUT: Dict[str, Any] = {
         "understates the corroborated concentration. Two retrieved cases at "
         "comparable readings were confirmed releases."
     ),
-    "recommended_action": "Dispatch inspection to node-02 sector and raise alert",
+    "recommended_action": "dispatch inspection",
     "contributing_factors": [
         "3 of 4 nodes agree near 1350 ppm",
         "node-04 flagged as disagreeing",
@@ -128,6 +131,7 @@ def build_system_prompt(threshold_ppm: float = THRESHOLD_PPM) -> str:
         threshold=threshold_ppm,
         classifications=" | ".join(CLASSIFICATION_VALUES),
         severities=" | ".join(SEVERITY_LEVELS),
+        actions=" | ".join(PERMITTED_ACTIONS),
     )
 
 
@@ -137,6 +141,7 @@ def build_repair_prompt() -> str:
         fields="\n".join(f"  - {f}" for f in DECISION_SCHEMA_FIELDS),
         classifications=" | ".join(CLASSIFICATION_VALUES),
         severities=" | ".join(SEVERITY_LEVELS),
+        actions=" | ".join(PERMITTED_ACTIONS),
     )
 
 
@@ -253,8 +258,9 @@ _LATEX_TEMPLATE = r"""% ========================================================
 The Decision Agent invokes Gemma~3 1B (INT4) locally through Ollama at
 temperature $0.1$ with a 256-token response limit (Section~\ref{sec:deployment}).
 Listing~\ref{lst:system-prompt} gives the system prompt, Listing~\ref{lst:user-prompt}
-the per-event user message rendered for a representative event, and
-Listing~\ref{lst:schema} the JSON schema every response must satisfy. On a
+the per-event user message rendered for a synthetic illustrative event, and
+Listing~\ref{lst:schema} the JSON schema every response must satisfy. The
+example is not a D1 or D2 observation and its historical cases are synthetic. On a
 schema violation the agent issues the single repair instruction in
 Listing~\ref{lst:repair}; if that also fails, or if the model does not respond
 within the 30-second decision deadline, the pipeline reverts to deterministic
@@ -264,7 +270,7 @@ threshold logic and records \texttt{degraded\_mode=true} in the event trace.
 @@SYSTEM@@
 \end{lstlisting}
 
-\begin{lstlisting}[style=adamcode,caption={Per-event user message, rendered for a representative triggered event.},label={lst:user-prompt}]
+\begin{lstlisting}[style=adamcode,caption={Per-event user message for a synthetic illustrative triggered event (not a D1/D2 observation).},label={lst:user-prompt}]
 @@USER@@
 \end{lstlisting}
 
@@ -276,7 +282,7 @@ threshold logic and records \texttt{degraded\_mode=true} in the event trace.
 @@REPAIR@@
 \end{lstlisting}
 
-\begin{lstlisting}[style=adamcode,caption={Representative valid response.},label={lst:example}]
+\begin{lstlisting}[style=adamcode,caption={Valid response for the synthetic illustrative event.},label={lst:example}]
 @@EXAMPLE@@
 \end{lstlisting}
 """
@@ -318,19 +324,19 @@ def _representative_user_prompt() -> str:
         history=[
             {
                 "fused_ppm": 1290,
-                "date": "2026-03-14",
+                "date": "synthetic case A",
                 "classification": "ANOMALY",
                 "outcome": "confirmed release, valve seal",
             },
             {
                 "fused_ppm": 1408,
-                "date": "2026-03-22",
+                "date": "synthetic case B",
                 "classification": "ANOMALY",
                 "outcome": "confirmed release",
             },
             {
                 "fused_ppm": 1102,
-                "date": "2026-04-02",
+                "date": "synthetic case C",
                 "classification": "NORMAL",
                 "outcome": "elevated ambient, no leak found",
             },

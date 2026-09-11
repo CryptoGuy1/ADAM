@@ -9,8 +9,10 @@ offline analysis run, and a reviewer should be able to read a trace file
 without installing the package.
 
 The central object is :class:`DecisionObject` - the seven-field structure the
-Decision Agent must emit (Section 3.4.2). :class:`EventTrace` is the tuple whose
-persistence Section 4.2 reports at 97.2%.
+Decision Agent must emit. :class:`EventTrace` records the audit tuple and, for
+new/reference runs, explicit acknowledgments from the enabled audit stores.
+The historical 446/459 figure is an end-to-end completion rate, not an
+independent dual-store persistence measurement.
 """
 
 from __future__ import annotations
@@ -311,10 +313,11 @@ class ResourceCounters:
 class EventTrace:
     """The persistent audit record for a resolved event.
 
-    Section 3.4.3 defines trace persistence over the tuple
-    <trigger, fused context, inference output, policy validation result,
-    final action>. :meth:`is_complete` is the predicate behind the 97.2%
-    figure in Section 4.2.
+    The audit trace records the tuple <trigger, fused context, inference output,
+    policy-validation result, final action>. :meth:`is_complete` is an explicit
+    commit predicate for new/reference traces. It must not be used to reinterpret
+    the historical 446/459 end-to-end completion denominator as an independently
+    measured dual-store persistence rate.
     """
 
     event_id: str

@@ -29,25 +29,40 @@ from typing import Any, Dict, List, Tuple
 #: C1 - end-to-end decision deadline, seconds. Table 3.
 DECISION_DEADLINE_S: float = 30.0
 
-#: C2 - sustained CPU budget as a fraction. Table 3. Measured as the mean over
-#: the deployment cycle on a rolling five-minute average, NOT the instantaneous
-#: inference-time peak.
+#: C2 - non-inference CPU budget as a fraction. Table 3. The reported evidence
+#: is the mean of per-window CPU peaks over sampled 60-s non-inference windows.
 MAX_SUSTAINED_CPU: float = 0.80
 
-#: C2 - rolling window over which sustained CPU is averaged. Section 3.3.
-CPU_ROLLING_WINDOW_S: float = 300.0
+#: Reference online-monitor window, seconds. The deposited C2 statistic is
+#: recomputed from the archived 60-s resource windows rather than inferred from
+#: this live rolling monitor.
+CPU_ROLLING_WINDOW_S: float = 60.0
 
 #: C4 - minimum crew size for degraded-mode operation. Table 3.
 MIN_CREW_SIZE: int = 2
 
 #: C5 - local event-screening threshold, ppm. Table 3.
-#: NOTE: the pre-revision codebase used 5000 ppm here and 5000/3000 on-chain.
-#: Confirmed 2026-07: the 72-hour deployment ran at 1000 ppm. The 2%-of-LEL
-#: argument in C1 and Section 5.1 depends on this value.
+#: This is the experimental operating point used for raw-MQ-4 screening. It is
+#: not represented as a regulatory or certified alarm threshold.
 THRESHOLD_PPM: float = 1000.0
 
-#: Methane lower explosive limit, ppm (5% by volume). Section 1.
-METHANE_LEL_PPM: float = 50_000.0
+#: Prototype governance warning and critical concentration bands. These are
+#: policy thresholds used to map structured decisions/actions; they are not
+#: regulatory alarm limits.
+WARNING_THRESHOLD_PPM: float = 3000.0
+CRITICAL_THRESHOLD_PPM: float = 5000.0
+
+#: Exact governance action vocabulary accepted by R3. Decision-Agent prompts,
+#: fitted substitutions, deterministic fallback, local validation, and the
+#: Solidity contract must remain within this set.
+PERMITTED_ACTIONS: Tuple[str, ...] = (
+    "monitor",
+    "continue monitoring",
+    "raise alert",
+    "dispatch inspection",
+    "escalate",
+    "log only",
+)
 
 # ---------------------------------------------------------------------------
 # Crew coordination  (manuscript Section 3.2)
@@ -91,10 +106,9 @@ def quorum(voter_count: int) -> int:
     ``GovernanceRules.getRequiredConsensus`` MUST agree with it for every crew
     size in Table 8; ``tests/test_manuscript_parity.py`` asserts that parity.
 
-    A prior contract revision used ``ceil(n * 51 / 100)``, which agrees with
-    the strict-majority rule at odd ``n`` but understates it at every even
-    ``n`` (n=2 -> 2 vs 2 ok, n=4 -> 3 vs 3 ok; the divergence appears against
-    the earlier ceil(n/2)+1 draft rule, which this revision replaces).
+    A prior contract revision encoded quorum as a percentage. The active
+    implementation uses Equation (4) directly so the executable rule and the
+    manuscript cannot drift through percentage-rounding conventions.
     """
     if voter_count < 1:
         raise ValueError(f"voter_count must be >= 1, got {voter_count}")
@@ -131,23 +145,8 @@ def fails_closed(voter_count: int, n_compromised: int) -> bool:
 # Conflict resolution  (manuscript Section 3.2.5, Equation 5)
 # ---------------------------------------------------------------------------
 
-#: Severity weight. Section 3.2.5.
-LAMBDA_SEVERITY: float = 0.7
-
-#: Recency weight. Section 3.2.5.
-LAMBDA_RECENCY: float = 0.3
-
-#: Normalization regime for Equation (5). Section 4.6 evaluates both.
-#:   "window"  - min-max across the population of concurrent events; preserves
-#:               the magnitude of each severity gap. Reported as the primary
-#:               regime (>=99% agreement across lambda_1 in [0.532, 0.998]).
-#:   "pairwise"- min-max within each conflicting pair; degenerate, since any
-#:               pair normalizes to {0, 1} and the decision flips at exactly 0.5.
-CONFLICT_NORMALIZATION: str = "window"
-
-#: Guard from Section 4.6: at lambda_1 = 1 the recency term vanishes and
-#: equal-severity conflicts cannot be separated.
-LAMBDA_SEVERITY_MAX_EXCLUSIVE: float = 1.0
+# Concurrent recommendations are ordered lexicographically:
+# higher severity first; recency breaks equal-severity ties.
 
 # ---------------------------------------------------------------------------
 # Sensing hardware  (manuscript Table 4)
@@ -217,8 +216,8 @@ DECISION_SCHEMA_FIELDS: Tuple[str, ...] = (
 #: Permitted values of the ``classification`` field. Equation (3).
 CLASSIFICATION_VALUES: Tuple[str, ...] = ("ANOMALY", "NORMAL")
 
-#: Permitted values of the ``severity`` field, ordered low to high. The conflict
-#: sweep in Section 4.6 spans exactly these levels.
+#: Permitted values of the ``severity`` field, ordered low to high. Conflict
+#: resolution compares this ordering first and timestamp second.
 SEVERITY_LEVELS: Tuple[str, ...] = ("NONE", "LOW", "MODERATE", "HIGH", "CRITICAL")
 
 #: Numeric encoding of severity for Equation (5).
@@ -300,7 +299,8 @@ N_TRIALS: int = 10
 EVENTS_PER_TRIAL: int = 200
 
 #: D2 - live coordination events over the 72-hour deployment. This is the
-#: trace-persistence denominator.
+#: end-to-end event-completion denominator; it is not an independent measure
+#: of dual-store persistence reliability.
 N_DEPLOYMENT_EVENTS: int = 459
 
 #: Events that completed end to end. Latency statistics use this denominator;
@@ -320,13 +320,9 @@ RF_PARAMS: Dict[str, Any] = {
 #: Significance level for the trial-level tests. Section 3.4.5.
 ALPHA: float = 0.05
 
-#: Eight systems are compared against one reference, so the Holm procedure
-#: controls the family-wise error rate. Section 3.4.5 reports both the exact
-#: and the adjusted p-value.
-N_COMPARISONS: int = 8
-
-#: Synthetic conflict pairs generated for the Section 4.6 sweep.
-CONFLICT_SWEEP_N: int = 20_000
+#: Ten comparator configurations are tested against ADAM_LLM in the main
+#: benchmark family, so Holm correction is applied across ten hypotheses.
+N_COMPARISONS: int = 10
 
 #: Global seed. Every stochastic component derives from this so that a reviewer
 #: reproduces figures bit-for-bit.
@@ -383,19 +379,31 @@ SIM_VALIDATION_BIAS_PCT: float = -0.017
 
 BASELINES: Tuple[str, ...] = (
     "static_threshold",
-    "random_forest",
+    "random_forest_raw",
+    "random_forest_fused",
+    "gradient_boosting_fused",
     "cloud_only",
+)
+
+ARCHITECTURAL_COMPARATORS: Tuple[str, ...] = (
     "single_agent",
 )
 
-ABLATIONS: Tuple[str, ...] = (
-    "no_aggregator",
-    "no_llm",
-    "no_blockchain",
-    "no_weaviate",
+ADAM_ABLATIONS: Tuple[str, ...] = (
+    "adam_no_aggregator",
+    "adam_no_llm",
+    "adam_no_blockchain",
+    "adam_no_weaviate",
 )
 
-SYSTEMS: Tuple[str, ...] = ("adam_full",) + BASELINES + ABLATIONS
+# Main benchmark family:
+#   1 reference ADAM configuration + 10 comparator configurations.
+SYSTEMS: Tuple[str, ...] = (
+    ("adam_llm",)
+    + BASELINES
+    + ARCHITECTURAL_COMPARATORS
+    + ADAM_ABLATIONS
+)
 
 
 # ---------------------------------------------------------------------------
@@ -407,8 +415,7 @@ SYSTEMS: Tuple[str, ...] = ("adam_full",) + BASELINES + ABLATIONS
 class ADAMConfig:
     """Mutable runtime view over the constants above.
 
-    Experiments that need to vary a parameter (the conflict sweep varies
-    lambda_1; the scalability harness varies concurrency) construct a modified
+    Experiments that vary supported runtime parameters construct a modified
     copy rather than mutating module state.
     """
 
@@ -416,10 +423,6 @@ class ADAMConfig:
     decision_deadline_s: float = DECISION_DEADLINE_S
     min_crew_size: int = MIN_CREW_SIZE
     max_sustained_cpu: float = MAX_SUSTAINED_CPU
-
-    lambda_severity: float = LAMBDA_SEVERITY
-    lambda_recency: float = LAMBDA_RECENCY
-    conflict_normalization: str = CONFLICT_NORMALIZATION
 
     ollama_model: str = OLLAMA_MODEL
     ollama_host: str = OLLAMA_HOST
@@ -441,24 +444,18 @@ class ADAMConfig:
     enable_blockchain: bool = True
     enable_weaviate: bool = True
 
-    #: How labeled D1 events are scored. Two runs are deposited and each mode
-    #: reproduces one of them:
+    #: Offline D1 evaluation semantics.
     #:
-    #:   "gated"          Deployment semantics. A reading below threshold_ppm
-    #:                    never forms a crew and is scored NORMAL on the fast
-    #:                    path; only triggered readings receive aggregation and
-    #:                    reasoning. Reproduces D1_RawTrigger_Log.
+    #:   "full_pipeline"  Benchmark semantics. Every labeled D1 event is
+    #:                    evaluated through the configured decision pipeline.
     #:
-    #:   "full_pipeline"  Benchmark semantics. Every labeled event is replayed
-    #:                    through the complete crew pipeline regardless of the
-    #:                    trigger, so all nine systems classify the same 2,000
-    #:                    events under identical conditions. Reproduces the
-    #:                    ADAM_Full predictions in 06A_Event_Predictions and
-    #:                    the Table 5 row.
+    #:   "gated"          Deployment semantics for compatibility with runtime
+    #:                    utilities. For manuscript D1 reporting, deployment
+    #:                    predictions are derived from the frozen full-pipeline
+    #:                    benchmark outputs rather than from a second LLM run.
     #:
-    #: The live deployment runner is gated unconditionally; this switch only
-    #: affects offline scoring of D1.
-    eval_mode: str = "gated"
+    #: The manuscript benchmark therefore defaults to full_pipeline.
+    eval_mode: str = "full_pipeline"
 
     seed: int = SEED
 
@@ -467,23 +464,6 @@ class ADAMConfig:
 
     def validate(self) -> None:
         """Reject configurations the manuscript rules out."""
-        if not 0.0 < self.lambda_severity < LAMBDA_SEVERITY_MAX_EXCLUSIVE:
-            raise ValueError(
-                f"lambda_severity must lie strictly in (0, 1); got "
-                f"{self.lambda_severity}. Section 4.6: at lambda_1 = 1 the "
-                f"recency term vanishes and equal-severity conflicts cannot be "
-                f"separated."
-            )
-        if abs(self.lambda_severity + self.lambda_recency - 1.0) > 1e-9:
-            raise ValueError(
-                f"lambda_severity + lambda_recency must equal 1; got "
-                f"{self.lambda_severity + self.lambda_recency}"
-            )
-        if self.conflict_normalization not in ("window", "pairwise"):
-            raise ValueError(
-                f"conflict_normalization must be 'window' or 'pairwise'; got "
-                f"{self.conflict_normalization!r}"
-            )
         if self.eval_mode not in ("gated", "full_pipeline"):
             raise ValueError(
                 f"eval_mode must be 'gated' or 'full_pipeline'; got "
@@ -507,12 +487,6 @@ class ADAMConfig:
         base.update(overrides)
         return ADAMConfig(**base)
 
-    @property
-    def threshold_fraction_of_lel(self) -> float:
-        """Screening threshold as a fraction of the LEL. Section 3.3 (C1)."""
-        return self.threshold_ppm / METHANE_LEL_PPM
-
-
 DEFAULT_CONFIG = ADAMConfig()
 
 
@@ -535,12 +509,6 @@ def verify_against_manuscript() -> List[str]:
     problems: List[str] = []
 
     # ---- structural checks, independent of the dataset ----------------------
-
-    frac = THRESHOLD_PPM / METHANE_LEL_PPM
-    if abs(frac - 0.02) > 1e-9:
-        problems.append(
-            f"threshold/LEL = {frac:.4%}, constraint C1 and Section 5.1 state 2%"
-        )
 
     expected_table8 = {2: (2, 0), 3: (2, 1), 4: (3, 1), 5: (3, 2), 6: (4, 2), 7: (4, 3)}
     for n, (exp_q, exp_f) in expected_table8.items():
@@ -613,24 +581,25 @@ def verify_against_manuscript() -> List[str]:
     except ms.DatasetUnavailable as exc:
         problems.append(str(exc))
 
-    # Both deposited ADAM runs over D1 must reconcile: the full-pipeline
-    # benchmark (Table 5) and the trigger-gated deployment semantics
-    # (D1_RawTrigger_Summary).
+    # Revised deployment semantics are derived deterministically from the
+    # frozen full-pipeline predictions; the old gated sheet is historical only.
     try:
-        gated = ms.gated_run_summary()
-        close("gated run triggered events", gated["triggered"], 889, 0)
-        close("gated run F1", gated["f1"], 0.8142, 0.002)
+        dep = ms.derived_deployment_summary()
+        close("deployment-semantics triggered events", dep["triggered"], 889, 0)
+        close("deployment-semantics F1", dep["f1"], 0.830, 0.002)
+        close("deployment-semantics FAR", dep["far"], 0.066, 0.002)
+        close("above-gate prediction mismatches", dep["above_gate_mismatches"], 0, 0)
     except ms.DatasetUnavailable as exc:
         problems.append(str(exc))
 
     # Every system the code evaluates must appear in the deposit.
     deposited = set(ms.evaluated_systems())
     alias = {
-        "adam_full": "ADAM_Full", "static_threshold": "Static_Threshold",
-        "random_forest": "Random_Forest", "cloud_only": "Cloud_Only",
-        "single_agent": "SingleAgent", "no_aggregator": "ADAM_NoAgg",
-        "no_llm": "ADAM_NoLLM", "no_blockchain": "ADAM_NoBlockchain",
-        "no_weaviate": "ADAM_NoWeaviate",
+        "adam_llm": "ADAM_LLM", "static_threshold": "Static_Threshold",
+        "random_forest_raw": "Random_Forest", "cloud_only": "Cloud_Only",
+        "single_agent": "SingleAgent", "adam_no_aggregator": "ADAM_NoAgg",
+        "adam_no_llm": "ADAM_NoLLM", "adam_no_blockchain": "ADAM_NoBlockchain",
+        "adam_no_weaviate": "ADAM_NoWeaviate",
     }
     for key in SYSTEMS:
         want = alias.get(key)

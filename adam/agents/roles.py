@@ -36,7 +36,7 @@ import logging
 import statistics
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from ..config import ADAMConfig, DEFAULT_CONFIG, SEVERITY_SCORES
 from ..llm.client import InferenceResult, OllamaClient, deterministic_fallback
@@ -143,7 +143,11 @@ class SensorAgent(Agent):
         """
         local_ppm = float(context.get("trigger_ppm", 0.0))
         triggered = trigger(local_ppm, self.config.threshold_ppm) == 1
-        base = self.baseline_mean
+        event_baseline = context.get("baseline_window")
+        if event_baseline:
+            base = statistics.fmean(event_baseline)
+        else:
+            base = self.baseline_mean
         departure = (local_ppm / base) if base and base > 0 else float("inf")
 
         if decision.is_anomaly:
@@ -244,12 +248,36 @@ class AggregatorAgent(Agent):
 # ---------------------------------------------------------------------------
 
 
-class DecisionAgent(Agent):
-    """Builds the prompt, invokes the local model, returns d_t.
+class DecisionBackend(Protocol):
+    """Interchangeable reasoner occupying the ADAM Decision-Agent slot.
 
-    Section 4.2 attributes 81.4% of the decision budget to this agent's
-    inference call, and Section 5.3 identifies it as the sole optimization
-    lever. It is the only agent that touches the model.
+    A backend receives the same event-time evidence assembled by the crew and
+    returns the same structured ``InferenceResult`` consumed by voting,
+    governance, persistence, and audit logic.
+    """
+
+    name: str
+
+    def reason(
+        self,
+        *,
+        event: CrewEvent,
+        fusion: FusionResult,
+        node_readings: Sequence[Dict[str, Any]],
+        baseline_window: Sequence[float],
+        history: Sequence[Dict[str, Any]],
+        deadline_s: float,
+        threshold_ppm: float,
+    ) -> InferenceResult:
+        ...
+
+
+class DecisionAgent(Agent):
+    """Hosts the configured reasoner and returns the structured decision d_t.
+
+    Gemma is the default backend in ADAM_LLM. The same slot can host a fitted
+    model or deterministic reasoner while the surrounding crew, voting,
+    governance, persistence, and audit path remain unchanged.
     """
 
     role = "decision"
@@ -260,9 +288,11 @@ class DecisionAgent(Agent):
         node_id: str,
         config: ADAMConfig = DEFAULT_CONFIG,
         client: Optional[OllamaClient] = None,
+        backend: Optional[DecisionBackend] = None,
     ):
         super().__init__(agent_id, node_id, config)
         self.client = client
+        self.backend = backend
         self._last: Optional[DecisionObject] = None
 
     def reason(
@@ -281,6 +311,21 @@ class DecisionAgent(Agent):
         genuine bypass, not a suppressed result.
         """
         deadline = deadline_s if deadline_s is not None else self.config.decision_deadline_s
+
+        # A configured backend occupies the same Decision-Agent slot as Gemma.
+        # Substituted reasoners are planned configurations, not failure modes.
+        if self.backend is not None:
+            result = self.backend.reason(
+                event=event,
+                fusion=fusion,
+                node_readings=node_readings,
+                baseline_window=baseline_window,
+                history=history,
+                deadline_s=deadline,
+                threshold_ppm=self.config.threshold_ppm,
+            )
+            self._last = result.decision
+            return result
 
         if not self.config.enable_llm or self.client is None:
             ablated = not self.config.enable_llm
@@ -469,6 +514,7 @@ __all__ = [
     "SensorAgent",
     "AggregatorAgent",
     "DecisionAgent",
+    "DecisionBackend",
     "CoordinatorAgent",
     "ValidationOutcome",
 ]

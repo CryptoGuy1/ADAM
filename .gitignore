@@ -12,3 +12,5 @@ results/
 data/artifacts/
 .pytest_cache/
 .DS_Store
+
+figures/

@@ -35,7 +35,6 @@ contract DecisionLogger {
     struct ConflictResolution {
         uint256[] conflictingDecisions;
         uint256 resolvedDecisionId;
-        uint256 lambdaSeverityScaled;  // lambda_1 x 100
         uint256 resolvedAt;
     }
 
@@ -56,8 +55,7 @@ contract DecisionLogger {
     );
     event ConflictResolved(
         uint256 indexed conflictId,
-        uint256 resolvedDecisionId,
-        uint256 lambdaSeverityScaled
+        uint256 resolvedDecisionId
     );
 
     /// @notice Commit a decision tuple. Algorithm 1 line 20.
@@ -98,24 +96,21 @@ contract DecisionLogger {
         );
     }
 
-    /// @notice Record the outcome of Equation (5). Algorithm 1 line 18.
+    /// @notice Record the outcome of the severity-then-recency conflict rule.
     function logConflictResolution(
         uint256[] calldata conflictingDecisions,
-        uint256 resolvedDecisionId,
-        uint256 lambdaSeverityScaled
+        uint256 resolvedDecisionId
     ) external returns (uint256 conflictId) {
         require(conflictingDecisions.length >= 2, "DecisionLogger: need >= 2 candidates");
         require(decisions[resolvedDecisionId].loggedAt != 0, "DecisionLogger: unknown winner");
-        require(lambdaSeverityScaled < 100, "DecisionLogger: lambda_1 must be below 1");
 
         conflictId = ++conflictCounter;
         conflicts[conflictId] = ConflictResolution({
             conflictingDecisions: conflictingDecisions,
             resolvedDecisionId: resolvedDecisionId,
-            lambdaSeverityScaled: lambdaSeverityScaled,
             resolvedAt: block.timestamp
         });
-        emit ConflictResolved(conflictId, resolvedDecisionId, lambdaSeverityScaled);
+        emit ConflictResolved(conflictId, resolvedDecisionId);
     }
 
     function getEventDecisions(bytes32 eventId) external view returns (uint256[] memory) {

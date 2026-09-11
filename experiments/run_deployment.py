@@ -14,7 +14,7 @@ What D2 produces
 ----------------
 459 EventTrace records with six per-stage latencies each (Equation 6), resource
 counters, and completeness flags. Section 4.2's figures are readouts of these:
-mean 18.99 s end-to-end, 81.5% in reasoning, 97.2% trace persistence.
+mean 18.99 s end-to-end, 81.5% in reasoning, and 97.2% end-to-end completion.
 
 On the scalability design
 -------------------------
@@ -172,9 +172,9 @@ def summarize_deployment(
     within = sum(1 for t in traces if t.within_deadline(deadline_s))
     degraded = sum(1 for t in traces if t.degraded_mode)
     executed = sum(1 for t in traces if t.executed)
-    # Per-store commit outcomes are reported separately from completion so that
-    # trace persistence is auditable rather than inferred from the completion
-    # flag alone (Section 3.4.6). The 2025 deployment predates this breakdown.
+    # Per-store commit outcomes are reported separately for new/reference runs.
+    # The historical 2025 traces do not preserve independent acknowledgments
+    # for both stores, so their 446/459 denominator is completion only.
     chain_ok = sum(1 for t in traces if t.persisted_chain)
     weaviate_ok = sum(1 for t in traces if t.persisted_weaviate)
     required = sorted({s for t in traces for s in t.required_stores})
@@ -194,7 +194,7 @@ def summarize_deployment(
             "max": max(totals),
         },
         "stages": stage_summary,
-        "trace_persistence": complete / len(traces),
+        "explicit_trace_commit_fraction": complete / len(traces),
         "required_stores": required,
         "persisted_chain_fraction": chain_ok / len(traces),
         "persisted_weaviate_fraction": weaviate_ok / len(traces),
@@ -204,7 +204,7 @@ def summarize_deployment(
         "executed_fraction": executed / len(traces),
         "reference": {
             "mean_s": 18.9,
-            "trace_persistence": 0.972,
+            "historical_completion_rate": 0.972,
             "reason_share": 0.815,
         },
     }
@@ -492,8 +492,9 @@ def main() -> int:
             f"{(f'{ref:.0f}' if ref else '--'):>12}"
         )
     print(
-        f"\ntrace persistence {summary['trace_persistence']:.1%} "
-        f"(manuscript 97.2%)   within deadline {summary['within_deadline']:.1%}"
+        f"\nreference-run explicit trace commits "
+        f"{summary['explicit_trace_commit_fraction']:.1%}   "
+        f"within deadline {summary['within_deadline']:.1%}"
         f"   degraded {summary['degraded_fraction']:.1%}"
     )
 

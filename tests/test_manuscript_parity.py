@@ -22,10 +22,8 @@ from pathlib import Path
 import pytest
 
 from adam.config import (
+    CRITICAL_THRESHOLD_PPM,
     DECISION_DEADLINE_S,
-    LAMBDA_RECENCY,
-    LAMBDA_SEVERITY,
-    METHANE_LEL_PPM,
     MIN_CREW_SIZE,
     N_DEPLOYMENT_EVENTS,
     NODE_SCALING_FIT_HW,
@@ -34,6 +32,7 @@ from adam.config import (
     REFERENCE_STAGE_LATENCY_MS,
     SENSOR_ERROR_VARIANCE_RANGE_PPM2,
     THRESHOLD_PPM,
+    WARNING_THRESHOLD_PPM,
     ADAMConfig,
     fails_closed,
     is_subvertible,
@@ -43,7 +42,6 @@ from adam.config import (
 )
 from adam.mechanisms import (
     Candidate,
-    flip_threshold,
     fuse_readings,
     quorum_satisfied,
     resolve_conflict,
@@ -65,10 +63,9 @@ def test_config_reproduces_manuscript():
     assert not problems, "config drifted from manuscript:\n  " + "\n  ".join(problems)
 
 
-def test_threshold_is_two_percent_of_lel():
-    """Constraint C1's argument depends on this exact ratio."""
+def test_screening_threshold_matches_manuscript():
+    """Constraint C5 uses a 1,000 ppm raw-MQ-4 screening threshold."""
     assert THRESHOLD_PPM == 1000.0
-    assert THRESHOLD_PPM / METHANE_LEL_PPM == pytest.approx(0.02)
 
 
 def test_stage_latencies_sum_to_reported_mean():
@@ -77,8 +74,8 @@ def test_stage_latencies_sum_to_reported_mean():
     assert total_s == pytest.approx(18.99, abs=0.05)
 
 
-def test_reasoning_dominates_latency_budget():
-    """Section 4.2 and 5.3 both rest on reasoning being the sole bottleneck."""
+def test_reasoning_is_dominant_latency_component():
+    """Local reasoning accounts for about 81.5% of completed-event mean latency."""
     total = sum(REFERENCE_STAGE_LATENCY_MS.values())
     share = REFERENCE_STAGE_LATENCY_MS["T_reason"] / total
     assert share == pytest.approx(0.815, abs=0.002)
@@ -137,20 +134,26 @@ def test_error_variance_exceeds_reference_tolerance():
 
 
 def test_holm_reproduces_published_adjustments():
-    """The Holm correction must give Table 5's adjusted column."""
+    """The ten-comparison Holm family must reproduce the revised Table 5."""
     from analysis.metrics import holm_adjust
 
     raw = {
-        "static": 0.001953, "rf": 0.001953, "single": 0.001953, "nollm": 0.001953,
-        "noagg": 0.003906, "noweav": 0.003906,
-        "cloud": 0.048828, "noblockchain": 0.097656,
+        "static": 0.001953125,
+        "rf_raw": 0.001953125,
+        "rf_contextual": 0.005859375,
+        "gbm_contextual": 0.001953125,
+        "cloud": 0.048828125,
+        "single": 0.001953125,
+        "noagg": 0.00390625,
+        "nollm": 0.001953125,
+        "noblockchain": 0.09765625,
+        "noweav": 0.00390625,
     }
     adj = holm_adjust(raw)
-    assert round(adj["static"], 3) == 0.016
-    assert round(adj["noagg"], 3) == 0.016
-    assert round(adj["cloud"], 3) == 0.098
-    assert round(adj["noblockchain"], 3) == 0.098
-    # Two comparisons must fail to survive correction.
+    assert adj["static"] == pytest.approx(0.01953125)
+    assert adj["rf_contextual"] == pytest.approx(0.01953125)
+    assert adj["cloud"] == pytest.approx(0.09765625)
+    assert adj["noblockchain"] == pytest.approx(0.09765625)
     assert sum(1 for v in adj.values() if v >= 0.05) == 2
 
 
@@ -205,12 +208,14 @@ def test_degraded_two_agent_crew_requires_unanimity():
     assert not quorum_satisfied(1, 2)
 
 
-def test_deployed_crew_tolerates_one_compromised_agent():
-    """Section 4.5.1: the n=4 crew tolerates one, fails closed at two."""
-    assert tolerated_faults(4) == 1
-    assert fails_closed(4, 2)
-    assert not is_subvertible(4, 2)
-    assert is_subvertible(4, 3)
+def test_deployed_voting_set_tolerates_one_compromised_agent():
+    """The deployed four-role crew has three voters; two colluding voters subvert."""
+    from adam.config import DEPLOYED_VOTER_COUNT
+
+    assert DEPLOYED_VOTER_COUNT == 3
+    assert tolerated_faults(DEPLOYED_VOTER_COUNT) == 1
+    assert not is_subvertible(DEPLOYED_VOTER_COUNT, 1)
+    assert is_subvertible(DEPLOYED_VOTER_COUNT, 2)
 
 
 def test_percentage_quorum_rule_is_rejected():
@@ -262,6 +267,62 @@ def test_solidity_screening_threshold_is_1000():
     assert m, "screeningThreshold not set in the constructor"
     assert int(m.group(1)) == int(THRESHOLD_PPM) == 1000
 
+
+
+
+def test_solidity_governance_rules_cover_python_policy_surface():
+    """Reviewer-facing contract must expose the same R1--R6 inputs as Python.
+
+    This is a source-level parity guard because Solidity toolchains are optional
+    in the Python CI environment. It catches the specific drift that previously
+    left permitted-action and degraded-mode policy invisible on-chain.
+    """
+    sol = (REPO / "contracts" / "GovernanceRules.sol").read_text()
+
+    signature = re.search(
+        r"function validateDecision\((.*?)\) external view returns",
+        sol,
+        re.DOTALL,
+    )
+    assert signature, "validateDecision not found in GovernanceRules.sol"
+    params = signature.group(1)
+    for required in (
+        "methanePpm",
+        "confidenceScaled",
+        "classification",
+        "severity",
+        "recommendedAction",
+        "requiresReview",
+        "degradedMode",
+        "crewSize",
+        "approvals",
+    ):
+        assert required in params, f"Solidity validator missing {required}"
+
+    # R1--R6 policy surfaces. The exact wording may evolve, but these helpers
+    # and branches must remain present if Python/Solidity parity is claimed.
+    assert "_isRecognizedSeverity(severity)" in sol
+    assert "confidenceScaled < minConfidenceScaled" in sol
+    assert "_isPermittedAction(recommendedAction)" in sol
+    assert "_isPassiveOnly(recommendedAction)" in sol
+    assert '_eq(severity, "CRITICAL")' in sol
+    assert 'degradedMode && _eq(classification, "ANOMALY")' in sol
+
+
+def test_active_contract_has_no_weighted_conflict_resolver():
+    """The revised manuscript uses severity first, timestamp only as tie-breaker."""
+    logger_sol = (REPO / "contracts" / "DecisionLogger.sol").read_text()
+    banned = ("lambdaSeverity", "lambda_1", "LAMBDA_SEVERITY", "weighted conflict")
+    lowered = logger_sol.lower()
+    for token in banned:
+        assert token.lower() not in lowered, f"legacy conflict token remains: {token}"
+
+
+def test_contract_does_not_encode_lel_derivation_for_screening_threshold():
+    """1,000 ppm is an experimental operating point, not a claimed LEL-derived rule."""
+    sol = (REPO / "contracts" / "GovernanceRules.sol").read_text()
+    assert "METHANE_LEL_PPM" not in sol
+    assert "thresholdPercentOfLel" not in sol
 
 def test_solidity_tolerated_faults_matches_table8():
     def solidity_tolerated(n: int) -> int:
@@ -348,53 +409,47 @@ def test_fusion_flags_injected_outlier():
     assert "attacked" in fuse_readings(readings, outlier_z=1.5).outliers
 
 
-def test_recency_is_inverse_age_not_inverse_timestamp():
-    """Section 3.2.5: inverse absolute timestamp is numerically degenerate."""
-    now = 1_000_000.0
-    older = Candidate("a", 0.5, now - 10.0)
-    newer = Candidate("b", 0.5, now - 1.0)
-    assert newer.recency(now) > older.recency(now)
-    assert newer.recency(now) == pytest.approx(1.0)
+def test_conflict_prefers_higher_severity_even_when_older():
+    """Equation (5): severity takes precedence over recency."""
+    high_old = Candidate("high", 1.0, -20.0, event_id="e-high")
+    low_new = Candidate("low", 0.25, -1.0, event_id="e-low")
 
+    winner = resolve_conflict([high_old, low_new])
 
-def test_conflict_prefers_severity_at_configured_weights():
-    now = 0.0
-    high_old = Candidate("high", 1.0, -20.0)
-    low_new = Candidate("low", 0.25, -1.0)
-    winner = resolve_conflict(
-        [high_old, low_new], now, LAMBDA_SEVERITY, LAMBDA_RECENCY, "window"
-    )
     assert winner.action == "high"
 
 
-def test_pairwise_normalization_flips_at_exactly_half():
-    """Section 4.6's degeneracy result."""
-    now = 0.0
-    a = Candidate("a", 1.0, -20.0)
-    b = Candidate("b", 0.25, -1.0)
-    ft = flip_threshold(a, b, now, normalization="pairwise")
-    assert ft == pytest.approx(0.5)
+def test_equal_severity_prefers_more_recent_recommendation():
+    """Equation (5): recency is used only as a severity tie-break."""
+    older = Candidate("older", 0.75, -10.0, event_id="e-old")
+    newer = Candidate("newer", 0.75, -1.0, event_id="e-new")
+
+    winner = resolve_conflict([older, newer])
+
+    assert winner.action == "newer"
 
 
-def test_conflict_resolution_is_deterministic():
-    """The audit trace must be replayable."""
-    now = 0.0
-    cands = [Candidate("a", 0.75, -5.0), Candidate("b", 0.75, -5.0)]
-    winners = {
-        resolve_conflict(cands, now, 0.7, 0.3, "window").action for _ in range(50)
-    }
+def test_single_conflict_candidate_returns_itself():
+    candidate = Candidate("alert", 0.75, -2.0, event_id="e-1")
+
+    assert resolve_conflict([candidate]) is candidate
+
+
+def test_empty_conflict_candidate_set_is_rejected():
+    with pytest.raises(ValueError, match="no candidates"):
+        resolve_conflict([])
+
+
+def test_conflict_resolution_is_deterministic_on_exact_tie():
+    """Identical severity and time are resolved by stable metadata."""
+    candidates = [
+        Candidate("monitor", 0.75, -5.0, event_id="event-a"),
+        Candidate("alert", 0.75, -5.0, event_id="event-b"),
+    ]
+
+    winners = {resolve_conflict(candidates).action for _ in range(50)}
+
     assert len(winners) == 1
-
-
-def test_lambda_one_is_rejected():
-    """Section 4.6 bounds lambda_1 strictly below 1."""
-    with pytest.raises(ValueError, match="strictly"):
-        ADAMConfig(lambda_severity=1.0, lambda_recency=0.0)
-
-
-def test_lambda_weights_must_sum_to_one():
-    with pytest.raises(ValueError, match="must equal 1"):
-        ADAMConfig(lambda_severity=0.7, lambda_recency=0.5)
 
 
 def test_min_crew_size_respects_c4():
@@ -689,7 +744,7 @@ def test_security_results_reproduce_from_deposit():
     fail = rs.model_failure(path)
     assert fail["induced_failures"] == 19
     assert fail["crews_completed"] == 30
-    assert fail["f1_episode"] == pytest.approx(0.774, abs=0.002)
+    assert fail["f1_fallback_decisions_only"] == pytest.approx(0.842, abs=0.002)
 
 
 def test_egress_reports_measured_quantities_only():
@@ -707,7 +762,7 @@ def test_egress_reports_measured_quantities_only():
     eg = rs.egress(ms.dataset_path())
 
     assert "cloud_cost" not in eg
-    adam = eg["per_system"]["ADAM_Full"]
+    adam = eg["per_system"]["ADAM_LLM"]
     cloud = eg["per_system"]["Cloud_Only"]
     assert adam["windows"] == 12 and cloud["windows"] == 8
     assert adam["kb_per_window"] == 0.0
@@ -731,14 +786,8 @@ def test_static_threshold_baseline_reproduces():
     assert got["far"] == pytest.approx(0.165, abs=0.002)
 
 
-def test_gated_run_reproduces_summary():
-    """The trigger-gated D1 run is the deployed operating point.
-
-    Its overall figures come from D1_RawTrigger_Summary, and two structural
-    properties must hold row by row: the trigger fires exactly when the raw
-    reading meets the screening threshold, and an untriggered event is never
-    classified as an anomaly.
-    """
+def test_deployment_semantics_workbook_sheet_reproduces_summary():
+    """The deposited gated sheet is the deterministic revised operating point."""
     from adam import manuscript as ms
 
     if not ms.available():
@@ -747,7 +796,8 @@ def test_gated_run_reproduces_summary():
     g = ms.gated_run_summary()
     assert g["triggered"] == 889
     assert g["trigger_rate"] == pytest.approx(0.4445, abs=0.0005)
-    assert g["f1"] == pytest.approx(0.8142, abs=0.002)
+    assert g["f1"] == pytest.approx(0.830, abs=0.002)
+    assert g["far"] == pytest.approx(0.066, abs=0.002)
 
     struct = ms.gated_predictions_agree()
     assert struct["rows"] == 2000
@@ -755,25 +805,19 @@ def test_gated_run_reproduces_summary():
     assert struct["untriggered_anomalies"] == 0
 
 
-def test_two_adam_runs_are_distinct_and_ordered():
-    """Both deposited D1 runs must be present and relate as the paper states.
-
-    The full-pipeline benchmark measures interpretation quality over all
-    2,000 events; the gated run measures the deployed operating point, where
-    the screening threshold caps recall. The benchmark therefore sits above
-    the gated run, and both sit above the raw fixed-threshold rule.
-    """
+def test_benchmark_and_deployment_semantics_are_distinct_and_ordered():
+    """Benchmark reasoning remains stronger than the gate-limited operating point."""
     from adam import manuscript as ms
 
     if not ms.available():
         pytest.skip("deposited dataset not present")
 
-    benchmark = ms.detection_scores()["ADAM_Full"]["f1"]
-    gated = ms.gated_run_summary()["f1"]
+    benchmark = ms.detection_scores()["ADAM_LLM"]["f1"]
+    deployment = ms.gated_run_summary()["f1"]
     static = ms.threshold_baseline("Raw_Instantaneous_PPM")["f1"]
     assert benchmark == pytest.approx(0.896, abs=0.002)
-    assert gated == pytest.approx(0.814, abs=0.002)
-    assert benchmark > gated > static
+    assert deployment == pytest.approx(0.830, abs=0.002)
+    assert benchmark > deployment > static
 
 
 def test_eval_mode_controls_the_gate():
@@ -797,7 +841,6 @@ def test_eval_mode_controls_the_gate():
             chain=NullChainClient(),
             validator=LocalValidator(),
             llm_client=None,
-            seed_memory=False,
         )
 
     readings = (
@@ -818,3 +861,418 @@ def test_eval_mode_controls_the_gate():
     full = make("full_pipeline")
     full.predict(sub_threshold)
     assert len(full.traces) == 1, "full-pipeline mode must run the crew workflow"
+
+# ---------------------------------------------------------------------------
+# Decision-Agent substitution path
+# ---------------------------------------------------------------------------
+
+
+def test_fitted_decision_agent_feature_vector_has_eight_features():
+    from experiments.decision_agent_backends import decision_feature_vector
+
+    x = decision_feature_vector(
+        raw_ppm=1200.0,
+        fused_ppm=1100.0,
+        dispersion_ppm=50.0,
+        baseline_window=[300, 310, 320, 330, 340, 350],
+        threshold_ppm=1000.0,
+    )
+    assert x.shape == (8,)
+    # Baseline must be causal and use only the supplied six prior values.
+    assert x[5] == pytest.approx(325.0)
+    assert x[6] == pytest.approx(1100.0 / 325.0)
+    assert x[7] == pytest.approx(775.0)
+
+
+def test_offline_nominal_chain_adapter_acknowledges_without_claiming_blockchain():
+    from adam.governance.chain import InMemoryChainClient
+
+    client = InMemoryChainClient()
+    class E:
+        event_id = "evt-1"
+    class D:
+        def to_dict(self): return {"classification": "NORMAL"}
+    class O:
+        approved = True
+
+    receipt = client.log_decision(E(), D(), "monitor", O())
+    assert receipt == "memory://decision/1"
+    assert len(client.records) == 1
+
+
+def test_substitution_runner_omits_zero_differences_before_exact_wilcoxon():
+    src = (REPO / "experiments" / "run_decision_agent_substitution.py").read_text()
+    assert "nonzero = delta[np.abs(delta) > 1e-12]" in src
+    assert "wilcoxon(\n                nonzero," in src
+
+# ---------------------------------------------------------------------------
+# Semantic-memory causality
+# ---------------------------------------------------------------------------
+
+
+def _memory_trace(event_id: str, timestamp: float, fused_ppm: float):
+    from adam.schemas import DecisionObject, EventTrace
+    return EventTrace(
+        event_id=event_id,
+        timestamp=timestamp,
+        trigger_node="N1",
+        trigger_ppm=fused_ppm,
+        fused_ppm=fused_ppm,
+        decision=DecisionObject(
+            classification="NORMAL",
+            confidence=0.9,
+            severity="NONE",
+            reasoning="resolved historical event",
+            recommended_action="monitor",
+            contributing_factors=["test"],
+            requires_human_review=False,
+        ),
+        governance_valid=True,
+        final_action="monitor",
+    )
+
+
+def test_inmemory_semantic_retrieval_excludes_current_and_future_records():
+    from adam.memory.store import InMemoryStore
+
+    store = InMemoryStore()
+    assert store.persist_trace(_memory_trace("past", 90.0, 1005.0))
+    assert store.persist_trace(_memory_trace("current", 100.0, 1001.0))
+    assert store.persist_trace(_memory_trace("future", 110.0, 1000.5))
+
+    got = store.retrieve(1000.0, k=5, cutoff_timestamp=100.0)
+    assert [r["event_id"] for r in got] == ["past"]
+
+
+def test_crew_passes_exclusive_event_timestamp_to_semantic_retrieval():
+    src = (REPO / "adam" / "crew.py").read_text()
+    assert "cutoff_timestamp=event.timestamp" in src
+
+
+def test_reference_fit_does_not_seed_semantic_memory_from_labels():
+    src = (REPO / "ablations" / "systems.py").read_text()
+    fit_body = src.split("def fit(self, train", 1)[1].split("def predict", 1)[0]
+    assert "persist_trace" not in fit_body
+    assert "historical training-fold outcome" not in fit_body
+
+# ---------------------------------------------------------------------------
+# Deployment-semantics derivation
+# ---------------------------------------------------------------------------
+
+
+def test_deployment_semantics_script_preserves_above_gate_and_forces_below_gate():
+    src = (REPO / "scripts" / "derive_deployment_semantics.py").read_text()
+    assert "if above:" in src
+    assert "pred = int(b.predicted)" in src
+    assert "pred = 0" in src
+    assert "never invokes Ollama" in src
+
+
+def test_run_trials_rejects_second_stochastic_gated_reproduction():
+    src = (REPO / "experiments" / "run_trials.py").read_text()
+    assert 'if args.eval_mode == "gated"' in src
+    assert "derive deployment semantics" in src.lower()
+
+# ---------------------------------------------------------------------------
+# Leakage-safe fusion calibration
+# ---------------------------------------------------------------------------
+
+
+def _cal_event(trial, idx, ref, n1, n2):
+    from adam.schemas import LabeledEvent, SensorReading
+    readings = (
+        SensorReading("N1", float(idx), float(n1), reference_ppm=float(ref), error_variance=999.0),
+        SensorReading("N2", float(idx), float(n2), reference_ppm=float(ref), error_variance=999.0),
+    )
+    return LabeledEvent(
+        trial_id=trial,
+        event_index=idx,
+        timestamp=float(idx),
+        readings=readings,
+        label=int(ref >= 1000.0),
+        reference_ppm=float(ref),
+    )
+
+
+def test_fold_calibration_ignores_extreme_heldout_residuals():
+    from data.calibration import calibrate_fold, estimate_error_variances
+
+    train = [
+        _cal_event(1, 0, 500, 490, 520),
+        _cal_event(1, 1, 600, 620, 570),
+        _cal_event(2, 2, 700, 685, 730),
+        _cal_event(2, 3, 800, 825, 760),
+    ]
+    heldout = [
+        _cal_event(3, 4, 900, 9000, 10),
+        _cal_event(3, 5, 950, 9500, 5),
+    ]
+
+    expected = estimate_error_variances(train)
+    train_c, test_c, got = calibrate_fold(train, heldout)
+    assert got == pytest.approx(expected)
+
+    # If held-out residuals leaked into calibration these values would explode.
+    pooled = estimate_error_variances(train + heldout)
+    assert pooled["N1"] > got["N1"] * 100
+    assert pooled["N2"] > got["N2"] * 100
+
+    for original, calibrated in zip(heldout, test_c):
+        assert calibrated.label == original.label
+        assert calibrated.reference_ppm == original.reference_ppm
+        for ro, rc in zip(original.readings, calibrated.readings):
+            assert rc.node_id == ro.node_id
+            assert rc.methane_ppm == ro.methane_ppm
+            assert rc.timestamp == ro.timestamp
+            assert rc.error_variance == pytest.approx(expected[ro.node_id])
+
+
+def test_reported_harnesses_keep_fixed_weights_and_expose_fold_local_sensitivity():
+    main = (REPO / "experiments" / "run_trials.py").read_text()
+    swap = (REPO / "experiments" / "run_decision_agent_substitution.py").read_text()
+    assert "fold_local_calibration: bool = False" in main
+    assert "--fold-local-calibration" in main
+    assert "fold_local_calibration: bool = False" in swap
+    assert "--fold-local-calibration" in swap
+    assert "fixed deposited inverse-variance weights" in swap
+
+
+def test_adam_reference_fit_does_not_warm_state_from_other_trials():
+    src = (REPO / "ablations" / "systems.py").read_text()
+    fit_body = src.split("def fit(self, train", 1)[1].split("def predict", 1)[0]
+    assert "observe(" not in fit_body
+    assert "persist_trace" not in fit_body
+
+def test_contextual_fitted_baselines_use_same_eight_features_as_decision_agent():
+    from baselines.systems import (
+        CONTEXTUAL_FEATURE_NAMES,
+        DECISION_AGENT_FEATURE_NAMES,
+        FUSED_BASELINE_FEATURE_NAMES,
+    )
+    assert len(CONTEXTUAL_FEATURE_NAMES) == 8
+    assert FUSED_BASELINE_FEATURE_NAMES == CONTEXTUAL_FEATURE_NAMES
+    assert DECISION_AGENT_FEATURE_NAMES == CONTEXTUAL_FEATURE_NAMES
+
+
+def test_policy_bands_and_fallback_actions_match_governance():
+    from adam.config import PERMITTED_ACTIONS
+    from adam.llm.client import deterministic_fallback
+    from experiments.decision_agent_backends import decision_from_probability
+
+    low = deterministic_fallback(1500.0)
+    critical = deterministic_fallback(CRITICAL_THRESHOLD_PPM + 1)
+    assert low.severity == "LOW"
+    assert critical.severity == "CRITICAL"
+    assert low.recommended_action in PERMITTED_ACTIONS
+    assert critical.recommended_action in PERMITTED_ACTIONS
+
+    fitted = decision_from_probability(
+        probability_anomaly=0.9,
+        fused_ppm=WARNING_THRESHOLD_PPM + 1,
+        dispersion_ppm=10.0,
+        variant="test",
+        threshold_ppm=THRESHOLD_PPM,
+    )
+    assert fitted.severity == "HIGH"
+    assert fitted.recommended_action in PERMITTED_ACTIONS
+
+
+def test_zero_budget_fails_closed_before_reasoner_invocation():
+    from adam.crew import ADAMNode
+    from adam.governance.chain import InMemoryChainClient, LocalValidator
+    from adam.memory.store import InMemoryStore
+    from adam.schemas import CrewEvent, SensorReading
+
+    class CountingBackend:
+        name = "counting"
+        def __init__(self): self.calls = 0
+        def reason(self, **kwargs):
+            self.calls += 1
+            raise AssertionError("reasoner must not run after deadline exhaustion")
+
+    backend = CountingBackend()
+    node = ADAMNode(
+        "deadline-node",
+        config=ADAMConfig(decision_deadline_s=0.0, enable_llm=True),
+        memory=InMemoryStore(),
+        chain=InMemoryChainClient(),
+        validator=LocalValidator(),
+        decision_backend=backend,
+    )
+    event = CrewEvent(
+        event_id="deadline-event",
+        timestamp=1.0,
+        trigger_node="n1",
+        trigger_ppm=1200.0,
+    )
+    readings = [SensorReading("n1", 1.0, 1200.0, error_variance=6200.0)]
+    trace = node.handle_event(event, readings, sample_resources=False)
+    assert backend.calls == 0
+    assert trace.failure_stage == "deadline_before_reasoning"
+    assert not trace.executed
+
+
+# ---------------------------------------------------------------------------
+# Degraded-condition harness
+# ---------------------------------------------------------------------------
+
+
+def test_degraded_harness_dropout_refuses_stale_n4_and_refuses_label_changes():
+    import numpy as np
+    import pandas as pd
+    from experiments.degraded_harness import apply_condition, condition_seed, _node_sigma
+    from adam.schemas import SensorReading
+    from adam.mechanisms import fuse_readings
+
+    rows = []
+    for k in range(6):
+        ref = 900.0 + 10 * k
+        for node, offset in [("N1", 10), ("N2", -5), ("N3", 20), ("N4", 400)]:
+            rows.append({
+                "event_id": f"E{k}", "trial": 1, "node_id": node,
+                "timestamp": float(k), "trigger_node": "N1",
+                "raw_ppm": ref + offset, "reference_ppm": ref,
+            })
+    df = pd.DataFrame(rows)
+    sigma = _node_sigma(df)
+    seed, _ = condition_seed("one_node_dropout", 1)
+    out = apply_condition(df, "one_node_dropout", 1, np.random.default_rng(seed), sigma)
+
+    # Pick the last event, where N4 must be offline.
+    g = out[out.event_id == "E5"]
+    assert not bool(g[g.node_id == "N4"].iloc[0].node_online)
+    assert np.isnan(g[g.node_id == "N4"].iloc[0].perturbed_ppm)
+    assert g.reference_ppm.nunique() == 1
+
+    # Fusion is constructed only from online rows; N4's stale/high value is not
+    # silently substituted. Equal variances make the expected fused value the
+    # simple mean of N1--N3.
+    online = g[g.node_online]
+    readings = [
+        SensorReading(
+            node_id=row.node_id,
+            timestamp=float(row.timestamp),
+            methane_ppm=float(row.perturbed_ppm),
+            reference_ppm=float(row.reference_ppm),
+            error_variance=100.0,
+        )
+        for row in online.itertuples(index=False)
+    ]
+    fused = fuse_readings(readings)
+    assert tuple(fused.contributing_nodes) == ("N1", "N2", "N3")
+    assert fused.fused_ppm == pytest.approx(float(online.perturbed_ppm.mean()))
+
+
+def test_degraded_harness_hashes_agent_facing_replay_fields():
+    src = (REPO / "experiments" / "degraded_harness.py").read_text()
+    for field in ("trial", "event_id", "node_id", "timestamp", "perturbed_ppm", "node_online"):
+        assert field in src
+
+# ---------------------------------------------------------------------------
+# Appendix A / prompt source of truth
+# ---------------------------------------------------------------------------
+
+
+def test_generated_appendix_example_is_explicitly_synthetic_and_date_neutral():
+    from adam.llm.prompt import emit_latex
+
+    latex = emit_latex()
+    assert "synthetic illustrative event" in latex
+    assert "not a D1/D2 observation" in latex
+    assert "2026-03-" not in latex
+    assert "2026-04-" not in latex
+
+
+def test_prompt_human_review_rule_matches_methods():
+    from adam.llm.prompt import build_system_prompt
+
+    prompt = build_system_prompt()
+    assert "confidence is below 0.6" in prompt
+    assert "dispersion exceeds half the fused estimate" in prompt
+    assert "severity is\nCRITICAL" in prompt or "severity is CRITICAL" in prompt
+
+
+
+def test_fides_client_exposes_onchain_governance_validation_without_web3():
+    """Real-chain path must call GovernanceRules before ledger persistence."""
+    from adam.governance.chain import FidesInnovaClient
+    from adam.schemas import CrewEvent, DecisionObject
+
+    class _Call:
+        def call(self):
+            return (True, "policy satisfied")
+
+    class _Functions:
+        def __init__(self):
+            self.args = None
+
+        def validateDecision(self, *args):
+            self.args = args
+            return _Call()
+
+    class _Contract:
+        def __init__(self):
+            self.functions = _Functions()
+
+    contract = _Contract()
+    client = FidesInnovaClient()
+    client._w3 = object()  # avoid connect(); no web3 dependency in this unit test
+    client._load_contract = lambda name: contract
+
+    event = CrewEvent(
+        event_id="evt-abcdef12",
+        trigger_node="N1",
+        trigger_ppm=1200.0,
+        timestamp=1.0,
+    )
+    event.record_vote("sensor", True)
+    event.record_vote("aggregator", True)
+    event.record_vote("decision", False)
+    decision = DecisionObject(
+        classification="ANOMALY",
+        confidence=0.82,
+        severity="HIGH",
+        reasoning="test",
+        recommended_action="raise alert",
+        contributing_factors=["test"],
+        requires_human_review=False,
+    )
+
+    valid, reason = client.validate(decision, event)
+    assert valid is True
+    assert reason == "policy satisfied"
+    args = contract.functions.args
+    assert args[0] == 1200
+    assert args[1] == 82
+    assert args[2] == "ANOMALY"
+    assert args[3] == "HIGH"
+    assert args[4] == "raise alert"
+    assert args[6] is False  # degraded_mode
+    assert args[7] == 3      # number of ballots
+    assert args[8] == 2      # approvals
+
+
+def test_fides_governance_validation_fails_closed_on_contract_error():
+    from adam.governance.chain import FidesInnovaClient
+    from adam.schemas import CrewEvent, DecisionObject
+
+    client = FidesInnovaClient()
+    client._w3 = object()
+    client._load_contract = lambda name: (_ for _ in ()).throw(RuntimeError("rpc down"))
+
+    event = CrewEvent("evt-abcdef12", "N1", 1200.0, 1.0)
+    event.record_vote("sensor", True)
+    event.record_vote("aggregator", True)
+    decision = DecisionObject(
+        classification="ANOMALY",
+        confidence=0.82,
+        severity="HIGH",
+        reasoning="test",
+        recommended_action="raise alert",
+        contributing_factors=["test"],
+        requires_human_review=False,
+    )
+
+    valid, reason = client.validate(decision, event)
+    assert valid is False
+    assert "unavailable" in reason

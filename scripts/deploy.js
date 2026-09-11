@@ -3,8 +3,9 @@
  * manuscript.
  *
  * The post-deploy assertions matter: a contract that deploys but reports a
- * quorum disagreeing with Table 8, or a screening threshold that is not 2% of
- * the LEL, is a contract that will embarrass the paper. This script refuses to
+ * quorum disagreeing with the manuscript, or a screening threshold that does
+ * not match the configured experimental operating point, is a contract that
+ * should not be reported as aligned. This script refuses to
  * report success in that case.
  *
  *   npx hardhat run scripts/deploy.js --network fides
@@ -14,8 +15,8 @@ const fs = require("fs");
 const path = require("path");
 
 // Table 8 of the manuscript.
-const TABLE_8_QUORUM = { 2: 2, 3: 3, 4: 3, 5: 4, 6: 4, 7: 5 };
-const TABLE_8_FAULTS = { 2: 0, 3: 0, 4: 1, 5: 1, 6: 2, 7: 2 };
+const TABLE_8_QUORUM = { 2: 2, 3: 2, 4: 3, 5: 3, 6: 4, 7: 4 };
+const TABLE_8_FAULTS = { 2: 0, 3: 1, 4: 1, 5: 2, 6: 2, 7: 3 };
 
 async function main() {
   const [deployer] = await hre.ethers.getSigners();
@@ -66,16 +67,10 @@ async function main() {
   // -- verify against the manuscript
   console.log("Verifying on-chain state against the manuscript:");
   const screening = await governance.screeningThreshold();
-  const pctScaled = await governance.thresholdPercentOfLelScaled();
   console.log(`  screeningThreshold      ${screening} ppm`);
-  console.log(`  as % of LEL             ${Number(pctScaled) / 100}%`);
   if (Number(screening) !== 1000) {
     throw new Error(`screeningThreshold is ${screening}, constraint C5 requires 1000`);
   }
-  if (Number(pctScaled) !== 200) {
-    throw new Error(`threshold is ${Number(pctScaled) / 100}% of LEL, C1 argument requires 2%`);
-  }
-
   for (const [n, expected] of Object.entries(TABLE_8_QUORUM)) {
     const got = Number(await governance.requiredQuorum(n));
     const faults = Number(await governance.toleratedFaults(n));
@@ -98,8 +93,7 @@ async function main() {
     contracts: addresses,
     verifiedAgainstManuscript: {
       screeningThresholdPpm: Number(screening),
-      thresholdPercentOfLel: Number(pctScaled) / 100,
-      quorumRule: "ceil(n/2) + 1  (Equation 4)",
+      quorumRule: "floor(n/2) + 1 (Equation 4)",
       table8Verified: true,
     },
   };

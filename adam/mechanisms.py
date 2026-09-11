@@ -10,9 +10,8 @@ The manuscript's equations as pure functions, free of I/O and agent state.
     Equation (5)  conflict resolution          -> :func:`resolve_conflict`
     Equation (6)  end-to-end decision latency  -> ``StageLatencies.total_ms``
 
-Keeping these separable is what makes Section 4.6 tractable: the conflict sweep
-calls :func:`resolve_conflict` 20,000 times per lambda setting with no runtime
-attached.
+Keeping these mechanisms separable allows each manuscript equation to be
+tested independently of agent and service I/O.
 """
 
 from __future__ import annotations
@@ -22,12 +21,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .config import (
-    LAMBDA_RECENCY,
-    LAMBDA_SEVERITY,
-    THRESHOLD_PPM,
-    quorum,
-)
+from .config import THRESHOLD_PPM, quorum
 from .schemas import SensorReading
 
 logger = logging.getLogger(__name__)
@@ -206,149 +200,34 @@ class Candidate:
     """One competing recommendation entering Equation (5)."""
 
     action: str
-    severity: float  # already mapped through SEVERITY_SCORES
+    severity: float  # numeric value mapped from the ordered severity scale
     timestamp: float
     event_id: str = ""
 
-    def recency(self, t_now: float, epsilon: float = 1e-6) -> float:
-        """rec(a) = 1 / (t_now - t(a)). Equation (5).
 
-        Inverse *age*, not inverse absolute timestamp - Section 3.2.5 notes the
-        latter is numerically degenerate for concurrent events. ``epsilon``
-        floors the age so a candidate produced in the same instant does not
-        divide by zero.
-        """
-        age = max(t_now - self.timestamp, epsilon)
-        return 1.0 / age
+def resolve_conflict(candidates: Sequence[Candidate]) -> Candidate:
+    """Resolve concurrent recommendations by severity, then recency.
 
+    Implements the manuscript's lexicographic rule:
 
-def _min_max(values: Sequence[float]) -> List[float]:
-    """Min-max normalize to [0, 1]; a degenerate range maps to all 0.5.
+        a* = lex max(severity(a), timestamp(a))
 
-    Mapping a zero-range population to 0.5 rather than 0 keeps the two terms of
-    Equation (5) commensurate when every candidate shares a severity.
-    """
-    lo, hi = min(values), max(values)
-    if hi - lo < 1e-12:
-        return [0.5] * len(values)
-    return [(v - lo) / (hi - lo) for v in values]
-
-
-def resolve_conflict(
-    candidates: Sequence[Candidate],
-    t_now: float,
-    lambda_severity: float = LAMBDA_SEVERITY,
-    lambda_recency: float = LAMBDA_RECENCY,
-    normalization: str = "window",
-    population: Optional[Sequence[Candidate]] = None,
-) -> Candidate:
-    """Select a* among competing recommendations. Equation (5).
-
-        a* = argmax_a ( lambda_1 * sev~(a) + lambda_2 * rec~(a) )
-
-    where ~ denotes min-max normalization to [0, 1], which prevents unit
-    imbalance between a severity level and an inverse age in units of 1/s.
-
-    Parameters
-    ----------
-    normalization
-        ``"pairwise"`` normalizes within the candidate set alone. For a pair
-        this collapses to {0, 1} on both terms, so the decision flips at
-        exactly lambda_1 = 0.5 regardless of how large the severity gap is -
-        the degenerate regime characterized in Section 4.6.
-
-        ``"window"`` normalizes against ``population``, the set of concurrent
-        events in the decision window. This preserves the magnitude of each
-        gap and is the regime the manuscript reports as primary.
-    population
-        Reference set for window normalization. Defaults to ``candidates``,
-        under which the two regimes coincide.
-
-    Ties are broken by higher raw severity, then by earlier timestamp, so the
-    rule is deterministic - a requirement for the audit trace to be replayable.
+    Higher severity always takes precedence. The more recent recommendation
+    is used only when severity is equal. event_id and action provide stable
+    final tie-breaks when both severity and timestamp are identical.
     """
     if not candidates:
         raise ValueError("no candidates to resolve")
-    if len(candidates) == 1:
-        return candidates[0]
 
-    ref = list(population) if population else list(candidates)
-    if normalization == "pairwise":
-        ref = list(candidates)
-
-    ref_sev = [c.severity for c in ref]
-    ref_rec = [c.recency(t_now) for c in ref]
-
-    sev_lo, sev_hi = min(ref_sev), max(ref_sev)
-    rec_lo, rec_hi = min(ref_rec), max(ref_rec)
-
-    def _scale(value: float, lo: float, hi: float) -> float:
-        if hi - lo < 1e-12:
-            return 0.5
-        return min(1.0, max(0.0, (value - lo) / (hi - lo)))
-
-    best: Optional[Candidate] = None
-    best_score = float("-inf")
-    for cand in candidates:
-        s = _scale(cand.severity, sev_lo, sev_hi)
-        r = _scale(cand.recency(t_now), rec_lo, rec_hi)
-        score = lambda_severity * s + lambda_recency * r
-        key = (score, cand.severity, -cand.timestamp)
-        best_key = (best_score, best.severity, -best.timestamp) if best else None
-        if best is None or key > best_key:
-            best, best_score = cand, score
-
-    assert best is not None
-    return best
-
-
-def flip_threshold(
-    a: Candidate,
-    b: Candidate,
-    t_now: float,
-    normalization: str = "window",
-    population: Optional[Sequence[Candidate]] = None,
-) -> Optional[float]:
-    """The lambda_1 at which the winner between ``a`` and ``b`` changes.
-
-    Returns ``None`` when one candidate dominates on both criteria, so no
-    weighting can change the outcome - the 60.1% of pairs Section 4.6 reports
-    as resolving identically for any lambda_1.
-
-    Solving  l*sa + (1-l)*ra = l*sb + (1-l)*rb  for l gives
-
-        l* = (rb - ra) / ((sa - sb) + (rb - ra))
-
-    Used by ``experiments/run_conflict_sweep.py`` to build the flip-threshold
-    distribution in Figure 9(b) analytically rather than by dense sampling.
-    """
-    ref = list(population) if population else [a, b]
-    if normalization == "pairwise":
-        ref = [a, b]
-
-    ref_sev = [c.severity for c in ref]
-    ref_rec = [c.recency(t_now) for c in ref]
-    sev_lo, sev_hi = min(ref_sev), max(ref_sev)
-    rec_lo, rec_hi = min(ref_rec), max(ref_rec)
-
-    def _scale(value: float, lo: float, hi: float) -> float:
-        if hi - lo < 1e-12:
-            return 0.5
-        return min(1.0, max(0.0, (value - lo) / (hi - lo)))
-
-    sa, sb = _scale(a.severity, sev_lo, sev_hi), _scale(b.severity, sev_lo, sev_hi)
-    ra = _scale(a.recency(t_now), rec_lo, rec_hi)
-    rb = _scale(b.recency(t_now), rec_lo, rec_hi)
-
-    # Uncontested: the same candidate wins on both terms.
-    if (sa - sb) * (ra - rb) >= 0:
-        return None
-
-    denom = (sa - sb) + (rb - ra)
-    if abs(denom) < 1e-12:
-        return None
-    lam = (rb - ra) / denom
-    return lam if 0.0 <= lam <= 1.0 else None
+    return max(
+        candidates,
+        key=lambda c: (
+            float(c.severity),
+            float(c.timestamp),
+            str(c.event_id),
+            str(c.action),
+        ),
+    )
 
 
 __all__ = [
@@ -359,5 +238,4 @@ __all__ = [
     "quorum_satisfied",
     "Candidate",
     "resolve_conflict",
-    "flip_threshold",
 ]

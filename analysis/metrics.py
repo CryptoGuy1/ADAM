@@ -361,7 +361,7 @@ def wilcoxon_floor(n_trials: int) -> float:
 
 def build_table5(
     scores: Dict[str, SystemScores],
-    reference_key: str = "adam_full",
+    reference_key: str = "adam_llm",
     order: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, object]]:
     """Assemble Table 5: per-system metrics with p-values against ADAM Full."""

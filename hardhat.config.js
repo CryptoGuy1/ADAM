@@ -10,11 +10,12 @@ require("dotenv").config();
  */
 module.exports = {
   solidity: {
-    version: "0.8.24",
-    settings: {
-      optimizer: { enabled: true, runs: 200 },
-    },
+  version: "0.8.24",
+  settings: {
+    optimizer: { enabled: true, runs: 200 },
+    viaIR: true,
   },
+},
   paths: {
     sources: "./contracts",
     artifacts: "./blockchain/artifacts",

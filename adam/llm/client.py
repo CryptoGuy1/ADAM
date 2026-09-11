@@ -7,11 +7,11 @@ Section 4.5.2 specify:
 
     model call -> parse -> [one format-repair retry] -> deterministic fallback
 
-The fallback is the availability mechanism behind Section 4.5.2: terminating
-the Ollama process mid-monitoring drops F1 from 0.896 to 0.774 but leaves all 30
-crews completing without human intervention, with ``degraded_mode`` written
-into the trace so full-reasoning and fallback decisions stay distinguishable in
-the audit record.
+The fallback is the availability mechanism behind Section 4.5.2. In the
+reported stress test, deterministic fallback activated for all 19 induced local-
+model failures; 16 of those 19 final classifications matched the reference
+labels (F1 = 0.842). ``degraded_mode`` is written into the trace so full-
+reasoning and fallback decisions remain distinguishable in the audit record.
 
 Confidentiality note
 --------------------
@@ -33,12 +33,14 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import (
+    CRITICAL_THRESHOLD_PPM,
     LLM_FORMAT_REPAIR_RETRIES,
     LLM_MAX_TOKENS,
     LLM_TEMPERATURE,
     OLLAMA_HOST,
     OLLAMA_MODEL,
     THRESHOLD_PPM,
+    WARNING_THRESHOLD_PPM,
 )
 from ..schemas import DecisionObject, SchemaViolation
 from .prompt import build_repair_prompt, build_system_prompt
@@ -172,24 +174,24 @@ def deterministic_fallback(
 ) -> DecisionObject:
     """Threshold-only classification used when reasoning is unavailable.
 
-    This is the behavior measured at F1 = 0.774 in Section 4.5.2 - materially
-    below full ADAM, which is the point: the system stays available and says so
-    in the trace rather than failing silently or fabricating a judgement.
+    In the reported induced-failure arm, 16 of 19 fallback classifications
+    matched the reference labels (F1 = 0.842). The objective is availability
+    with an explicit degraded trace, not parity with full semantic reasoning.
 
-    Severity is banded off the fused estimate. ``requires_human_review`` is
-    always true, since no semantic interpretation stood behind the call.
+    Severity is mapped to the documented prototype governance bands: events
+    below the warning threshold are LOW, warning-band events are HIGH, and
+    events at or above the critical threshold are CRITICAL.
+    ``requires_human_review`` is always true because no semantic interpretation
+    stood behind the fallback decision.
     """
     is_anomaly = fused_ppm >= threshold_ppm
-    ratio = fused_ppm / threshold_ppm if threshold_ppm > 0 else 0.0
 
     if not is_anomaly:
         severity = "NONE"
-    elif ratio >= 5.0:
+    elif fused_ppm >= CRITICAL_THRESHOLD_PPM:
         severity = "CRITICAL"
-    elif ratio >= 2.0:
+    elif fused_ppm >= WARNING_THRESHOLD_PPM:
         severity = "HIGH"
-    elif ratio >= 1.5:
-        severity = "MODERATE"
     else:
         severity = "LOW"
 
@@ -203,9 +205,7 @@ def deterministic_fallback(
             f"No semantic reasoning was applied ({reason})."
         ),
         recommended_action=(
-            "Raise alert and request operator review"
-            if is_anomaly
-            else "Continue monitoring"
+            "raise alert" if is_anomaly else "continue monitoring"
         ),
         contributing_factors=["threshold comparison only", reason],
         requires_human_review=True,

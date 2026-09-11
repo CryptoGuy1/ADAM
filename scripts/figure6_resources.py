@@ -140,7 +140,7 @@ plt.close(fig)
 # ---------------------------------------------------------------- Table 7
 tr = pd.read_excel(WB, sheet_name="03_D1_Trial_Results")
 ROWS = [
-    ("ADAM (Full)", "ADAM_Full"),
+    ("ADAM_LLM", "ADAM_LLM"),
     ("Static Threshold", "Static_Threshold"),
     ("Random Forest", "Random_Forest"),
     ("Cloud-Only", "Cloud_Only"),

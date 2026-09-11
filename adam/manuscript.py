@@ -65,6 +65,7 @@ def _sheets() -> Dict[str, Any]:
         "tests": read("04_D1_Statistical_Tests", header=1),
         "trigger_log": read("D1_RawTrigger_Log"),
         "trigger_summary": read("D1_RawTrigger_Summary"),
+        "event_predictions": read("06A_Event_Predictions", header=3),
     }
 
 
@@ -75,7 +76,7 @@ def _num(frame, column):
 
 
 # ---------------------------------------------------------------------------
-# Deployment: latency and trace persistence
+# Deployment: latency and end-to-end completion
 # ---------------------------------------------------------------------------
 
 STAGE_COLUMNS = {
@@ -93,7 +94,7 @@ def _completed(coord):
 
 
 def deployment_events() -> int:
-    """N: every coordination event recorded, the trace-persistence denominator."""
+    """N: every coordination event recorded in the historical D2 deployment."""
     return int(len(_sheets()["coord"]))
 
 
@@ -103,6 +104,11 @@ def completed_events() -> int:
 
 
 def trace_persistence() -> float:
+    """Backward-compatible alias for the historical end-to-end completion rate.
+
+    D2 does not preserve independent acknowledgments for both audit stores, so
+    this value must not be described as measured dual-store persistence.
+    """
     return completed_events() / deployment_events()
 
 
@@ -221,9 +227,12 @@ def threshold_baseline(channel: str, threshold_ppm: float = 1000.0) -> Dict[str,
 
 
 def gated_run_summary() -> Dict[str, float]:
-    """Overall figures of the trigger-gated D1 run, from D1_RawTrigger_Summary.
+    """Legacy independently gated D1 run retained for provenance only.
 
-    This run scores D1 under deployment semantics: readings below the
+    This historical sheet is not the revised manuscript deployment-semantics
+    result. The current operating point is derived deterministically by
+    :func:`derived_deployment_summary` from frozen benchmark predictions.
+    Readings below the
     screening threshold never form a crew and are classified normal on the
     fast path, so only triggered readings receive aggregation and reasoning.
     It is the deployed operating point; the full-pipeline run behind Table 5
@@ -246,13 +255,63 @@ def gated_run_summary() -> Dict[str, float]:
     }
 
 
-def gated_predictions_agree() -> Dict[str, float]:
-    """Structural checks on the trigger-gated event log.
+def derived_deployment_summary() -> Dict[str, float]:
+    """Revised deployment semantics derived from frozen benchmark predictions.
 
-    Two properties define the gated run and both must hold for every one of
-    the 2,000 rows: the trigger fires exactly when the raw reading meets the
-    screening threshold, and an untriggered event is never classified as an
-    anomaly.
+    Above the 1,000 ppm raw screening gate, the stored ADAM_LLM benchmark
+    prediction is preserved exactly. Below the gate, the prediction is NORMAL.
+    The legacy D1_RawTrigger_* sheets are retained only as historical artifacts
+    of a separate stochastic execution and are not used for this result.
+    """
+    import numpy as np
+    import pandas as pd
+
+    sh = _sheets()
+    log = sh["trigger_log"].copy()
+    pred = sh["event_predictions"].dropna(subset=["Event_ID"]).copy()
+    m = log.merge(pred[["Event_ID", "ADAM_LLM"]], on="Event_ID", how="inner")
+    if len(m) != len(log):
+        raise DatasetUnavailable("could not align frozen ADAM_LLM predictions to trigger log")
+    above = _num(m, "Raw_Instantaneous_PPM") >= 1000.0
+    m["ADAM_Derived"] = np.where(above, m["ADAM_LLM"], "normal")
+
+    rows = []
+    for _trial, g in m.groupby("Trial", sort=True):
+        y = g["Ground_Truth_Label"].astype(str).str.lower().eq("anomaly")
+        p = g["ADAM_Derived"].astype(str).str.lower().eq("anomaly")
+        tp = int((y & p).sum()); fp = int((~y & p).sum())
+        fn = int((y & ~p).sum()); tn = int((~y & ~p).sum())
+        precision = tp / (tp + fp)
+        recall = tp / (tp + fn)
+        f1 = 2 * precision * recall / (precision + recall)
+        far = fp / (fp + tn)
+        rows.append((precision, recall, f1, far))
+    a = np.asarray(rows, dtype=float)
+    return {
+        "triggered": int(above.sum()),
+        "precision": float(a[:, 0].mean()),
+        "recall": float(a[:, 1].mean()),
+        "f1": float(a[:, 2].mean()),
+        "f1_sd": float(a[:, 2].std(ddof=1)),
+        "far": float(a[:, 3].mean()),
+        "far_sd": float(a[:, 3].std(ddof=1)),
+        "above_gate_mismatches": int(
+            m.loc[above, "ADAM_Derived"].astype(str).str.lower().ne(
+                m.loc[above, "ADAM_LLM"].astype(str).str.lower()
+            ).sum()
+        ),
+    }
+
+
+def gated_predictions_agree() -> Dict[str, float]:
+    """Structural checks on the historical trigger-gated workbook log.
+
+    This sheet documents the earlier independently gated D1 execution and is
+    retained as historical provenance only. The revised manuscript deployment
+    semantics are derived deterministically from frozen benchmark predictions
+    by :mod:`scripts.derive_deployment_semantics`. These row-level checks only
+    verify that the historical trigger flag followed the raw 1,000-ppm gate and
+    that untriggered rows were not called anomalous.
     """
     log = _sheets()["trigger_log"]
     raw = _num(log, "Raw_Instantaneous_PPM")
@@ -464,6 +523,7 @@ __all__ = [
     "empirical_scalability_rows",
     "sensor_error_variances",
     "gated_run_summary",
+    "derived_deployment_summary",
     "gated_predictions_agree",
     "statistical_tests",
 ]

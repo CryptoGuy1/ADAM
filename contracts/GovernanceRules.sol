@@ -29,10 +29,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  *      (2) SCREENING THRESHOLD. The previous constructor set
  *          criticalThreshold = 5000 and warningThreshold = 3000, with no
  *          screening threshold at all, while the manuscript's constraint C5
- *          specifies 1,000 ppm. The 1,000 ppm figure is load-bearing: the
- *          "about 2% of the lower explosive limit" argument in C1 and Section
- *          5.1 depends on it. `screeningThreshold` is now first-class and
- *          defaults to 1,000 ppm.
+ *          specifies the 1,000 ppm experimental operating point.
+ *          `screeningThreshold` is now first-class and defaults to 1,000 ppm.
  *
  *      The quorum rule is asserted against the Python implementation by
  *      tests/test_manuscript_parity.py, which fails CI if the two diverge.
@@ -49,9 +47,6 @@ contract GovernanceRules is Ownable {
 
     /// @notice Concentration above which an event is treated as a warning.
     uint256 public warningThreshold;
-
-    /// @notice Methane lower explosive limit, for on-chain sanity checks.
-    uint256 public constant METHANE_LEL_PPM = 50000;
 
     // ==================== Crew parameters ====================
 
@@ -75,9 +70,9 @@ contract GovernanceRules is Ownable {
     // ==================== Constructor ====================
 
     constructor() Ownable(msg.sender) {
-        screeningThreshold = 1000; // Constraint C5: 2% of the LEL
+        screeningThreshold = 1000; // Constraint C5: experimental screening threshold
         warningThreshold = 3000; // 3x screening
-        criticalThreshold = 5000; // 5x screening, 10% of the LEL
+        criticalThreshold = 5000; // policy critical band
         minCrewSize = 2; // Constraint C4
         sameEventWindow = 30; // matches the C1 deadline
         minConfidenceScaled = 35; // 0.35
@@ -167,15 +162,6 @@ contract GovernanceRules is Ownable {
         return diff <= sameEventWindow;
     }
 
-    /**
-     * @notice Screening threshold as a percentage of the LEL, scaled by 100.
-     * @dev Returns 200 for 1,000 ppm, i.e. 2.00%. Lets an auditor confirm the
-     *      C1 argument directly against deployed state.
-     */
-    function thresholdPercentOfLelScaled() external view returns (uint256) {
-        return (screeningThreshold * 10000) / METHANE_LEL_PPM;
-    }
-
     // ==================== Validation: V(d_t, S_t) ====================
 
     /**
@@ -192,36 +178,117 @@ contract GovernanceRules is Ownable {
     function validateDecision(
         uint256 methanePpm,
         uint256 confidenceScaled,
+        string calldata classification,
         string calldata severity,
+        string calldata recommendedAction,
         bool requiresReview,
+        bool degradedMode,
         uint256 crewSize,
         uint256 approvals
     ) external view returns (bool valid, string memory reason) {
+        // Formation/quorum checks are kept here as defense in depth. The
+        // Python Coordinator applies the same quorum rule before execution.
         if (crewSize < minCrewSize) {
             return (false, "crew below minimum size (C4)");
         }
         if (approvals < requiredQuorum(crewSize)) {
             return (false, "quorum not met");
         }
+
+        // R1: recognized severity.
+        if (!_isRecognizedSeverity(severity)) {
+            return (false, "unrecognized severity");
+        }
+
+        // R2: autonomous-action confidence floor.
         if (confidenceScaled < minConfidenceScaled) {
             return (false, "confidence below policy floor");
         }
-        if (
-            keccak256(bytes(severity)) == keccak256(bytes("CRITICAL")) &&
-            !requiresReview
-        ) {
+
+        // R3: the recommendation must contain an allowed policy action.
+        if (!_isPermittedAction(recommendedAction)) {
+            return (false, "action not permitted by policy");
+        }
+
+        // R4: at or above the critical concentration, passive-only actions
+        // are rejected. An action containing an alert remains active even if
+        // it also contains the word monitor. This mirrors LocalValidator.
+        if (methanePpm >= criticalThreshold && _isPassiveOnly(recommendedAction)) {
+            return (false, "passive action at critical concentration");
+        }
+
+        // R5: CRITICAL severity requires explicit human review.
+        if (_eq(severity, "CRITICAL") && !requiresReview) {
             return (false, "CRITICAL severity requires human review");
         }
-        if (methanePpm >= criticalThreshold && !requiresReview) {
-            return (false, "critical concentration requires human review");
+
+        // R6: degraded-mode anomalies are allowed only as explicitly marked
+        // degraded decisions. `degradedMode` is subsequently persisted by
+        // DecisionLogger, preventing fallback decisions from appearing as
+        // full semantic-reasoning decisions in the audit record.
+        if (degradedMode && _eq(classification, "ANOMALY")) {
+            return (true, "approved in degraded mode; no semantic reasoning applied");
         }
+
         return (true, "policy satisfied");
+    }
+
+    function _eq(string memory a, string memory b) internal pure returns (bool) {
+        return keccak256(bytes(a)) == keccak256(bytes(b));
+    }
+
+    function _contains(string memory haystack, string memory needle)
+        internal
+        pure
+        returns (bool)
+    {
+        bytes memory h = bytes(haystack);
+        bytes memory n = bytes(needle);
+        if (n.length == 0 || n.length > h.length) return false;
+        for (uint256 i = 0; i <= h.length - n.length; i++) {
+            bool match_ = true;
+            for (uint256 j = 0; j < n.length; j++) {
+                bytes1 hc = h[i + j];
+                bytes1 nc = n[j];
+                // ASCII-only case folding is sufficient for the fixed policy
+                // vocabulary used by the Decision Agent.
+                if (hc >= 0x41 && hc <= 0x5A) hc = bytes1(uint8(hc) + 32);
+                if (nc >= 0x41 && nc <= 0x5A) nc = bytes1(uint8(nc) + 32);
+                if (hc != nc) {
+                    match_ = false;
+                    break;
+                }
+            }
+            if (match_) return true;
+        }
+        return false;
+    }
+
+    function _isRecognizedSeverity(string memory severity) internal pure returns (bool) {
+        return _eq(severity, "NONE") || _eq(severity, "LOW") ||
+            _eq(severity, "MODERATE") || _eq(severity, "HIGH") ||
+            _eq(severity, "CRITICAL");
+    }
+
+    function _isPermittedAction(string memory action) internal pure returns (bool) {
+        return _contains(action, "monitor") ||
+            _contains(action, "continue monitoring") ||
+            _contains(action, "raise alert") ||
+            _contains(action, "dispatch inspection") ||
+            _contains(action, "escalate") ||
+            _contains(action, "log only");
+    }
+
+    function _isPassiveOnly(string memory action) internal pure returns (bool) {
+        bool passive = _contains(action, "monitor") || _contains(action, "log only");
+        bool activeAlert = _contains(action, "alert");
+        return passive && !activeAlert;
     }
 
     // ==================== Admin ====================
 
     function updateScreeningThreshold(uint256 v) external onlyOwner {
-        require(v > 0 && v < METHANE_LEL_PPM, "GovernanceRules: threshold out of range");
+        require(v > 0 && v < warningThreshold, "GovernanceRules: threshold out of range");
         emit ThresholdUpdated("screening", screeningThreshold, v);
         screeningThreshold = v;
     }

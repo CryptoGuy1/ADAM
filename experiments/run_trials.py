@@ -4,15 +4,15 @@ experiments.run_trials
 
 Scores every system over D1 and emits Table 5.
 
-Systems evaluated
------------------
-    cloud_only, single_agent, no_aggregator, no_llm, no_blockchain, no_weaviate
+Main benchmark
+--------------
+ADAM_LLM is evaluated against ten comparator configurations: raw-input and
+fused-input baselines, Cloud-Only, Single Agent, and four ADAM component
+ablations.
 
-All learned and memory-bearing systems use leave-one-trial-out splitting: for
-each fold the system is rebuilt, fitted on nine trials, and evaluated on the
-held-out one. This applies to ADAM and its ablations as well as to the Random
-Forest, because ADAM's semantic memory is seeded from the training fold and
-would otherwise carry the held-out trial's events.
+Stateful systems are rebuilt for each held-out trial. Supervised classifiers
+are fitted on the other nine trials. ADAM itself is not fitted from labels; its
+semantic memory contains only traces resolved earlier in the held-out replay.
 
 Usage
 -----
@@ -20,7 +20,7 @@ Usage
     python -m experiments.run_trials --data data/artifacts/d1_simulated.csv \
         --skip cloud_only --no-llm
 
-    # full reproduction against the deposited data
+    # reference rerun against an explicit event-level dataset
     python -m experiments.run_trials --data data/d1_labeled_trials.csv
 """
 
@@ -47,10 +47,13 @@ from analysis.metrics import (
 )
 from baselines.systems import (
     CloudOnly,
+    GradientBoostingFusedBaseline,
     RandomForestBaseline,
+    RandomForestFusedBaseline,
     SingleAgent,
     StaticThreshold,
 )
+from data.calibration import calibrate_fold
 from data.loader import Dataset, load_trials
 
 logger = logging.getLogger(__name__)
@@ -58,14 +61,16 @@ logger = logging.getLogger(__name__)
 #: Systems that must be rebuilt and refitted per fold. Stateless rule-based
 #: systems are exempt.
 _NEEDS_LOTO = {
-    "adam_full",
-    "random_forest",
+    "adam_llm",
+    "random_forest_raw",
+    "random_forest_fused",
+    "gradient_boosting_fused",
     "cloud_only",
     "single_agent",
-    "no_aggregator",
-    "no_llm",
-    "no_blockchain",
-    "no_weaviate",
+    "adam_no_aggregator",
+    "adam_no_llm",
+    "adam_no_blockchain",
+    "adam_no_weaviate",
 }
 
 
@@ -77,7 +82,7 @@ def build_factories(
     from adam.governance.chain import LocalValidator, NullChainClient
     from adam.memory.store import InMemoryStore
 
-    def adam_full() -> ADAMSystem:
+    def adam_llm() -> ADAMSystem:
         return ADAMSystem(
             config=config,
             memory=InMemoryStore(),
@@ -87,9 +92,15 @@ def build_factories(
         )
 
     factories: Dict[str, Callable[[], Any]] = {
-        "adam_full": adam_full,
+        "adam_llm": adam_llm,
         "static_threshold": lambda: StaticThreshold(config.threshold_ppm),
-        "random_forest": lambda: RandomForestBaseline(
+        "random_forest_raw": lambda: RandomForestBaseline(
+            threshold_ppm=config.threshold_ppm
+        ),
+        "random_forest_fused": lambda: RandomForestFusedBaseline(
+            threshold_ppm=config.threshold_ppm
+        ),
+        "gradient_boosting_fused": lambda: GradientBoostingFusedBaseline(
             threshold_ppm=config.threshold_ppm
         ),
         "cloud_only": lambda: CloudOnly(threshold_ppm=config.threshold_ppm),
@@ -115,8 +126,16 @@ def evaluate_system(
     name: str,
     factory: Callable[[], Any],
     dataset: Dataset,
+    *,
+    fold_local_calibration: bool = False,
 ) -> List[Prediction]:
-    """Evaluate one system, applying LOTO where the system carries state."""
+    """Evaluate one system under leave-one-trial-out state isolation.
+
+    By default, events retain the fixed sensor error variances stored in the
+    deposited D1 records, reproducing the reported benchmark. Set
+    ``fold_local_calibration=True`` for the stricter sensitivity analysis that
+    re-estimates fusion variances on the nine training trials of each fold.
+    """
     events = dataset.events
     if name not in _NEEDS_LOTO:
         system = factory()
@@ -125,8 +144,16 @@ def evaluate_system(
 
     preds: List[Prediction] = []
     for held_out in dataset.trial_ids:
-        train = [e for e in events if e.trial_id != held_out]
-        test = [e for e in events if e.trial_id == held_out]
+        raw_train = [e for e in events if e.trial_id != held_out]
+        raw_test = [e for e in events if e.trial_id == held_out]
+        if fold_local_calibration:
+            train, test, _fold_variances = calibrate_fold(raw_train, raw_test)
+        else:
+            # Reported benchmark: use the fixed error variances embedded in the
+            # deposited D1 records. The manuscript discloses the resulting
+            # indirect held-out influence and treats fold-local recalibration as
+            # a sensitivity analysis rather than rewriting historical evidence.
+            train, test = raw_train, raw_test
         system = factory()
         system.fit(train)
         preds.extend(system.predict_all(test))
@@ -159,16 +186,29 @@ def main() -> int:
     )
     ap.add_argument("--threshold", type=float, default=THRESHOLD_PPM)
     ap.add_argument(
+        "--fold-local-calibration",
+        action="store_true",
+        help="sensitivity analysis only: re-estimate sensor fusion variances on "
+        "the nine training trials of each fold instead of using the fixed "
+        "deposited weights used by the reported benchmark",
+    )
+    ap.add_argument(
         "--eval-mode",
         choices=("gated", "full_pipeline"),
         default="full_pipeline",
-        help="how ADAM and its ablations score D1. 'full_pipeline' replays "
-        "every event through the complete crew workflow and corresponds to "
-        "the nine-system benchmark of Table 5 (06A_Event_Predictions). "
-        "'gated' applies the deployment semantics, where sub-threshold "
-        "readings never form a crew, and corresponds to D1_RawTrigger_Log.",
+        help="benchmark runs use full_pipeline. The legacy 'gated' option is "
+        "rejected for manuscript reproduction; derive deployment semantics "
+        "from frozen benchmark predictions with "
+        "scripts/derive_deployment_semantics.py.",
     )
     args = ap.parse_args()
+
+    if args.eval_mode == "gated":
+        ap.error(
+            "A second gated LLM execution is not a valid revised-manuscript "
+            "reproduction. Run full_pipeline once, then derive deployment "
+            "semantics with scripts/derive_deployment_semantics.py."
+        )
 
     os.makedirs(args.out, exist_ok=True)
 
@@ -225,6 +265,14 @@ def main() -> int:
     if unknown:
         ap.error(f"unknown systems: {unknown}. Available: {sorted(factories)}")
 
+    fusion_dependent = {
+        "adam_llm", "random_forest_fused", "gradient_boosting_fused",
+        "cloud_only", "adam_no_aggregator", "adam_no_llm",
+        "adam_no_blockchain", "adam_no_weaviate",
+    }
+    if set(selected) & fusion_dependent:
+        dataset.require_multinode("fusion-dependent D1 benchmark", minimum=4)
+
     EGRESS.reset()
     scores: Dict[str, SystemScores] = {}
     timings: Dict[str, float] = {}
@@ -233,7 +281,12 @@ def main() -> int:
         logger.info("evaluating %s ...", name)
         t0 = time.perf_counter()
         try:
-            preds = evaluate_system(name, factories[name], dataset)
+            preds = evaluate_system(
+                name,
+                factories[name],
+                dataset,
+                fold_local_calibration=args.fold_local_calibration,
+            )
         except Exception as exc:
             logger.error("%s failed: %s", name, exc)
             continue
@@ -246,8 +299,8 @@ def main() -> int:
             for p in preds:
                 fh.write(json.dumps(p.to_dict()) + "\n")
 
-    if "adam_full" not in scores:
-        logger.error("adam_full was not evaluated; Table 5 needs it as reference")
+    if "adam_llm" not in scores:
+        logger.error("adam_llm was not evaluated; the benchmark table needs it as reference")
         return 1
 
     # -- zero-egress check (Section 4.5.3)
@@ -264,17 +317,19 @@ def main() -> int:
         logger.info("zero external egress confirmed for the ADAM run")
 
     order = [
-        "adam_full",
+        "adam_llm",
         "static_threshold",
-        "random_forest",
+        "random_forest_raw",
+        "random_forest_fused",
+        "gradient_boosting_fused",
         "cloud_only",
         "single_agent",
-        "no_aggregator",
-        "no_llm",
-        "no_blockchain",
-        "no_weaviate",
+        "adam_no_aggregator",
+        "adam_no_llm",
+        "adam_no_blockchain",
+        "adam_no_weaviate",
     ]
-    rows = build_table5(scores, reference_key="adam_full", order=order)
+    rows = build_table5(scores, reference_key="adam_llm", order=order)
 
     print()
     print(format_table5(rows, n_trials=len(dataset.trial_ids)))

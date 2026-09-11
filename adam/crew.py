@@ -117,11 +117,12 @@ class Crew:
 
 
 class ADAMNode:
-    """One edge node: hosts all four agent processes and forms crews on demand.
+    """One edge node with local logic for all four ADAM roles.
 
-    Section 3.4.1: "Each node hosts the Sensor, Aggregator, Decision, and
-    Coordinator agent processes, so it can join event-specific crews by role
-    availability."
+    The Sensor role screens continuously. When this node triggers an event,
+    Aggregator, Decision, and Coordinator role objects are instantiated locally
+    for that event. Peer nodes contribute measurements through the shared state
+    service; roles are not discovered or negotiated across physical nodes.
     """
 
     def __init__(
@@ -132,6 +133,7 @@ class ADAMNode:
         chain: Optional[Any] = None,
         validator: Optional[Any] = None,
         llm_client: Optional[OllamaClient] = None,
+        decision_backend: Optional[Any] = None,
     ):
         self.node_id = node_id
         self.config = config
@@ -139,7 +141,7 @@ class ADAMNode:
         self.chain = chain
         self.validator = validator
 
-        if llm_client is None and config.enable_llm:
+        if llm_client is None and config.enable_llm and decision_backend is None:
             llm_client = OllamaClient(
                 model=config.ollama_model,
                 host=config.ollama_host,
@@ -147,6 +149,7 @@ class ADAMNode:
                 max_tokens=config.llm_max_tokens,
             )
         self.llm_client = llm_client
+        self.decision_backend = decision_backend
 
         self.sensor = SensorAgent(f"{node_id}-sensor", node_id, config)
         self._pending: List[Tuple[CrewEvent, DecisionObject]] = []
@@ -154,20 +157,22 @@ class ADAMNode:
     # -- crew lifecycle ----------------------------------------------------
 
     def form_crew(self, event: CrewEvent, available_roles: Optional[Sequence[str]] = None) -> Crew:
-        """Assemble an event-specific crew. Algorithm 1 line 8.
+        """Instantiate the fixed role set for one event.
 
-        Agents self-select by role availability (Section 3.1.2). Constraint C4
-        permits degraded operation down to two agents; below that the node
-        refuses to form a crew rather than acting on unvalidated reasoning.
+        Role definitions are local and fixed rather than discovered across
+        physical nodes. The Aggregator may be absent in the degraded
+        configuration; Sensor, Decision, and Coordinator are required.
         """
         roles = set(available_roles) if available_roles is not None else set(("sensor", "aggregator", "decision", "coordinator"))
 
         if not self.config.enable_aggregator:
             roles.discard("aggregator")
 
-        if "sensor" not in roles or "coordinator" not in roles:
+        required_roles = {"sensor", "decision", "coordinator"}
+        missing_roles = required_roles - roles
+        if missing_roles:
             raise CrewFormationError(
-                f"cannot form a crew without both sensor and coordinator roles; "
+                f"cannot form a crew without required roles {sorted(missing_roles)}; "
                 f"available: {sorted(roles)}"
             )
 
@@ -177,7 +182,11 @@ class ADAMNode:
             else None
         )
         decision = DecisionAgent(
-            f"{self.node_id}-decision", self.node_id, self.config, client=self.llm_client
+            f"{self.node_id}-decision",
+            self.node_id,
+            self.config,
+            client=self.llm_client,
+            backend=self.decision_backend,
         )
         coordinator = CoordinatorAgent(
             f"{self.node_id}-coordinator", self.node_id, self.config, validator=self.validator
@@ -214,12 +223,21 @@ class ADAMNode:
         event: CrewEvent,
         peer_readings: Sequence[SensorReading],
         sample_resources: bool = True,
+        baseline_window: Optional[Sequence[float]] = None,
     ) -> EventTrace:
         """Run one full coordination episode. Algorithm 1 lines 6-21.
 
         Every stage is timed separately so that Figure 5's decomposition falls
         out of the trace rather than being reconstructed afterwards.
         """
+        # Freeze temporal context at event start. The current reading may update
+        # sensor state for future events, but must not contribute to its own baseline.
+        event_baseline = (
+            list(baseline_window)
+            if baseline_window is not None
+            else self.sensor.baseline
+        )
+
         timer = StageTimer()
         sampler = ResourceSampler() if sample_resources else None
         if sampler:
@@ -266,24 +284,45 @@ class ADAMNode:
                 history: List[Dict[str, Any]] = []
                 if self.memory is not None and self.config.enable_weaviate:
                     history = self.memory.retrieve(
-                        fused_ppm=fusion.fused_ppm, k=self.config.semantic_memory_k
+                        fused_ppm=fusion.fused_ppm,
+                        k=self.config.semantic_memory_k,
+                        cutoff_timestamp=event.timestamp,
                     )
 
-            # -- local reasoning (T_reason), Equation (3)
+            # -- local reasoning (T_reason), Equation (3). C1 is a shared
+            # end-to-end budget, not a per-stage timeout. If earlier stages
+            # consume it, do not grant the reasoner an artificial grace period.
+            spent_s = timer.total_ms / 1000.0
+            remaining = self.config.decision_deadline_s - spent_s
+            if remaining <= 0.0:
+                trace.failure_stage = "deadline_before_reasoning"
+                trace.latencies = timer.to_stage_latencies()
+                if sampler:
+                    trace.resources = sampler.stop()
+                return trace
+
             with timer.stage("T_reason"):
-                spent_s = timer.total_ms / 1000.0
-                remaining = max(self.config.decision_deadline_s - spent_s, 0.5)
                 inference = crew.decision.reason(
                     event=event,
                     fusion=fusion,
                     node_readings=[r.redacted() for r in peer_readings],
-                    baseline_window=crew.sensor.baseline,
+                    baseline_window=event_baseline,
                     history=history,
                     deadline_s=remaining,
                 )
             decision = inference.decision
             trace.decision = decision
             trace.degraded_mode = decision.degraded_mode
+
+            # A reasoner that consumes the remaining shared budget cannot be
+            # followed by voting/governance while still satisfying C1. Preserve
+            # its output in the trace, but fail closed before action validation.
+            if timer.total_ms / 1000.0 >= self.config.decision_deadline_s:
+                trace.failure_stage = "local_reasoning_deadline"
+                trace.latencies = timer.to_stage_latencies()
+                if sampler:
+                    trace.resources = sampler.stop()
+                return trace
 
             # -- votes and validation (T_gov), Equation (4)
             with timer.stage("T_gov"):
@@ -292,6 +331,7 @@ class ADAMNode:
                     "trigger_node": event.trigger_node,
                     "fused_ppm": fusion.fused_ppm,
                     "dispersion_ppm": fusion.dispersion_ppm,
+                    "baseline_window": list(event_baseline),
                 }
                 crew.coordinator.collect_votes(event, crew.voters, decision, context)
                 outcome = crew.coordinator.validate(event, decision, crew.voter_count)
@@ -425,13 +465,7 @@ class ADAMNode:
         if len(candidates) == 1:
             return "WITHHELD: validation failed, escalated for operator review"
 
-        winner = resolve_conflict(
-            candidates,
-            t_now=now,
-            lambda_severity=self.config.lambda_severity,
-            lambda_recency=self.config.lambda_recency,
-            normalization=self.config.conflict_normalization,
-        )
+        winner = resolve_conflict(candidates)
         return winner.action
 
     def register_pending(self, event: CrewEvent, decision: DecisionObject) -> None:

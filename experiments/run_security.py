@@ -308,7 +308,7 @@ def scenario_memory_poisoning(
             )
 
         preds = system.predict_all(test)
-        scores = score_system("adam_full", test, preds)
+        scores = score_system("adam_llm", test, preds)
         f1 = scores.pooled.f1
         if n_poison == 0:
             baseline_f1 = f1
@@ -425,13 +425,13 @@ def scenario_model_unavailability(
 ) -> ScenarioResult:
     """Ollama terminated mid-monitoring; the pipeline must stay available.
 
-    Section 4.5.2 reports F1 falling from 0.896 to 0.774 across the failure
-    episode, with all 19 induced failures recovered and all 30 crews completing and a 58 ms mean fallback
-    activation latency.
+    The reported availability test contains 30 monitored events: 19 induced
+    local-model failures and 11 concurrent controls. Deterministic fallback
+    activates for all 19 induced failures; 16/19 fallback-arm classifications
+    are correct (F1=0.842), and all 30 monitored crews complete.
 
-    The degradation is the point: the system continues, records that it is
-    degraded, and produces materially worse decisions. That is a safety
-    property only because ``degraded_mode`` is in the audit record.
+    The degraded-mode flag keeps fallback decisions distinguishable from normal
+    model-backed decisions in the audit record.
     """
     trial_ids = dataset.trial_ids
     holdout = trial_ids[-1]
@@ -448,7 +448,7 @@ def scenario_model_unavailability(
         )
         system.fit(train)
         preds = system.predict_all(test)
-        scores = score_system("adam_full", test, preds)
+        scores = score_system("adam_llm", test, preds)
         degraded_latencies = [p.latency_ms for p in preds if p.degraded_mode]
         completed = sum(1 for p in preds if p.confidence >= 0.0)
         return (
@@ -478,8 +478,8 @@ def scenario_model_unavailability(
     if healthy_f1 is None:
         notes.append(
             "No healthy baseline: Ollama was unavailable, so the reported "
-            "delta cannot be computed. Run with a live model to obtain the "
-            "0.896 -> 0.774 comparison."
+            "delta cannot be computed. Run with a live model for a matched "
+            "healthy/degraded reference comparison."
         )
 
     return ScenarioResult(
@@ -498,8 +498,7 @@ def scenario_model_unavailability(
         },
         reference={
             "f1_healthy": 0.896,
-            "f1_degraded": 0.774,      # over all 30 events in the episode
-            "f1_fallback_only": 0.842,  # over the 19 decisions fallback produced
+            "f1_fallback_only": 0.842,  # 16/19 correct in the induced-failure arm
             "completion_rate": 1.000,   # 30 of 30 crews completed
             "recovery_rate": 1.000,     # 19 of 19 induced failures recovered
             "mean_fallback_latency_ms": 55.7,

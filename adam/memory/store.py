@@ -55,7 +55,12 @@ class MemoryStore(Protocol):
 
     def publish_trigger(self, event: CrewEvent) -> bool: ...
     def clear_crew_event(self, event_id: str) -> bool: ...
-    def retrieve(self, fused_ppm: float, k: int = SEMANTIC_MEMORY_K) -> List[Dict[str, Any]]: ...
+    def retrieve(
+        self,
+        fused_ppm: float,
+        k: int = SEMANTIC_MEMORY_K,
+        cutoff_timestamp: Optional[float] = None,
+    ) -> List[Dict[str, Any]]: ...
     def persist_trace(self, trace: EventTrace) -> bool: ...
     def count_traces(self) -> int: ...
 
@@ -200,13 +205,32 @@ class InMemoryStore:
             )
         return True
 
-    def retrieve(self, fused_ppm: float, k: int = SEMANTIC_MEMORY_K) -> List[Dict[str, Any]]:
+    def retrieve(
+        self,
+        fused_ppm: float,
+        k: int = SEMANTIC_MEMORY_K,
+        cutoff_timestamp: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve only resolved records that are causal for this event.
+
+        ``cutoff_timestamp`` is exclusive: a record with the same timestamp as
+        the current event is not historical context. Omitting the cutoff is
+        retained for poisoning/unit harnesses that intentionally query the
+        complete fixture.
+        """
         valid = []
         for rec in self._traces:
-            if _validate_record(rec):
-                valid.append(rec)
-            else:
+            if not _validate_record(rec):
                 self.rejected_on_retrieve += 1
+                continue
+            if cutoff_timestamp is not None:
+                try:
+                    if float(rec.get("timestamp", float("inf"))) >= float(cutoff_timestamp):
+                        continue
+                except (TypeError, ValueError):
+                    self.rejected_on_retrieve += 1
+                    continue
+            valid.append(rec)
         ranked = sorted(valid, key=lambda r: abs(float(r["fused_ppm"]) - fused_ppm))
         return ranked[:k]
 
@@ -384,15 +408,21 @@ class WeaviateMemory:
             logger.exception("failed to persist trace %s", trace.event_id)
             return False
 
-    def retrieve(self, fused_ppm: float, k: int = SEMANTIC_MEMORY_K) -> List[Dict[str, Any]]:
-        """Retrieve h_past: historically similar resolved events."""
+    def retrieve(
+        self,
+        fused_ppm: float,
+        k: int = SEMANTIC_MEMORY_K,
+        cutoff_timestamp: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve causal h_past: similar records resolved before this event."""
         try:
             coll = self.client.collections.get(CLASS_EVENT_TRACE)
-            res = coll.query.near_text(
-                query=f"methane event at {fused_ppm:.0f} ppm",
-                limit=k * 2,
-                return_properties=[
+            kwargs: Dict[str, Any] = {
+                "query": f"methane event at {fused_ppm:.0f} ppm",
+                "limit": max(k * 4, k),
+                "return_properties": [
                     "event_id",
+                    "timestamp",
                     "fused_ppm",
                     "date",
                     "classification",
@@ -401,7 +431,13 @@ class WeaviateMemory:
                     "outcome",
                     "provenance",
                 ],
-            )
+            }
+            if cutoff_timestamp is not None:
+                from weaviate.classes.query import Filter  # type: ignore
+                kwargs["filters"] = Filter.by_property("timestamp").less_than(
+                    float(cutoff_timestamp)
+                )
+            res = coll.query.near_text(**kwargs)
         except Exception:
             logger.exception("semantic retrieval failed")
             return []
@@ -409,10 +445,20 @@ class WeaviateMemory:
         out: List[Dict[str, Any]] = []
         for obj in res.objects:
             rec = dict(obj.properties)
-            if _validate_record(rec):
-                out.append(rec)
-            else:
+            if not _validate_record(rec):
                 self.rejected_on_retrieve += 1
+                continue
+            # Defense in depth: enforce the temporal predicate again after the
+            # vector query so client/server filtering drift cannot leak future
+            # records into a decision.
+            if cutoff_timestamp is not None:
+                try:
+                    if float(rec.get("timestamp", float("inf"))) >= float(cutoff_timestamp):
+                        continue
+                except (TypeError, ValueError):
+                    self.rejected_on_retrieve += 1
+                    continue
+            out.append(rec)
             if len(out) >= k:
                 break
         return out

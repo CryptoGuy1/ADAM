@@ -10,7 +10,6 @@ figure cannot show something the run did not produce.
     Figure 4  per-trial F1 distributions                 <- results/trials/
     Figure 5  per-stage latency decomposition            <- results/deployment/
     Figure 8  latency against concurrency, with the fit  <- results/deployment/
-    Figure 9  conflict sensitivity and flip thresholds   <- results/conflict/
 
 Usage
 -----
@@ -73,7 +72,7 @@ def figure_f1_by_system(table5: List[Dict[str, Any]], out: str) -> Optional[str]
     labels = [str(r["system"]).replace("_", " ") for r in rows]
     vals = [r["f1"] for r in rows]
     errs = [r.get("f1_sd", 0.0) for r in rows]
-    colors = ["#1b1b1b" if r["system"] == "adam_full" else "#8a8a8a" for r in rows]
+    colors = ["#1b1b1b" if r["system"] == "adam_llm" else "#8a8a8a" for r in rows]
 
     fig, ax = plt.subplots(figsize=(6.5, 3.4))
     ax.bar(range(len(rows)), vals, yerr=errs, color=colors, capsize=3, width=0.68)
@@ -170,55 +169,6 @@ def figure_scalability(scal: Dict[str, Any], out: str) -> Optional[str]:
     return path
 
 
-def figure_conflict(conflict: Dict[str, Any], out: str) -> Optional[str]:
-    """Figure 9: agreement against lambda_1, and the flip-threshold spread."""
-    plt = _plt()
-    regimes = conflict.get("regimes", {})
-    if not regimes:
-        return None
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 3.0))
-
-    for i, (name, res) in enumerate(regimes.items()):
-        curve = res.get("agreement_curve", {})
-        xs = sorted(float(k) for k in curve)
-        ys = [curve[str(x)] if str(x) in curve else curve[f"{x:.4f}"] for x in xs]
-        ax1.plot(xs, ys, color=PALETTE[i], linewidth=1.2, label=name)
-
-    lam = conflict.get("configured_lambda_1", 0.7)
-    ax1.axvline(lam, color="#8a2020", linestyle="--", linewidth=0.8)
-    ax1.text(lam, 0.02, f" $\\lambda_1={lam}$", fontsize=7, color="#8a2020")
-    ax1.set_xlabel("$\\lambda_1$ (severity weight)")
-    ax1.set_ylabel("decision agreement")
-    ax1.set_ylim(0, 1.02)
-    ax1.grid(linestyle=":", linewidth=0.5, alpha=0.6)
-    ax1.set_axisbelow(True)
-    ax1.legend(fontsize=7, frameon=False, loc="lower right")
-
-    flips_path = os.path.join(os.path.dirname(out), "conflict", "flip_thresholds_window.json")
-    flips: List[float] = []
-    if os.path.exists(flips_path):
-        with open(flips_path) as fh:
-            flips = json.load(fh)
-    if flips:
-        ax2.hist(flips, bins=40, color="#4a4a4a", edgecolor="white", linewidth=0.4)
-        ax2.axvline(lam, color="#8a2020", linestyle="--", linewidth=0.8)
-        ax2.set_xlabel("flip threshold $\\lambda_1^*$")
-        ax2.set_ylabel("contested pairs")
-        ax2.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
-        ax2.set_axisbelow(True)
-    else:
-        ax2.text(0.5, 0.5, "no flip-threshold data", ha="center", va="center",
-                 transform=ax2.transAxes, fontsize=8)
-        ax2.set_xticks([])
-        ax2.set_yticks([])
-
-    path = os.path.join(out, "figure9_conflict_sensitivity.png")
-    fig.savefig(path)
-    plt.close(fig)
-    return path
-
-
 def figure_confusion(table5: List[Dict[str, Any]], out: str) -> Optional[str]:
     """Figure 3: precision/recall/FAR comparison across systems."""
     plt = _plt()
@@ -283,12 +233,6 @@ def main() -> int:
     scal = _load(os.path.join(args.results, "deployment", "scalability.json"))
     if scal:
         p = figure_scalability(scal, args.out)
-        if p:
-            written.append(p)
-
-    conf = _load(os.path.join(args.results, "conflict", "conflict_sweep.json"))
-    if conf:
-        p = figure_conflict(conf, args.out)
         if p:
             written.append(p)
 

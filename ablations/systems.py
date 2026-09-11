@@ -44,18 +44,13 @@ class ADAMSystem(BaselineSystem):
     trigger, crew formation, fusion, retrieval, reasoning, votes, validation,
     persistence, dissolution. Nothing is short-circuited for evaluation.
 
-    Two evaluation modes exist because two D1 runs are deposited. Under
-    ``eval_mode="gated"`` an event that does not trigger never forms a crew
-    (Section 3.1.1: routine sensing stays lightweight) and is scored NORMAL
-    without invoking the model; this is the deployed behavior and reproduces
-    D1_RawTrigger_Log. Under ``eval_mode="full_pipeline"`` every event runs
-    the complete crew workflow regardless of the trigger, which is how the
-    nine-system benchmark of Table 5 was produced; it reproduces the
-    ADAM_Full predictions in 06A_Event_Predictions. The live deployment
-    runner is gated unconditionally.
+    The reference benchmark replays every labeled event through the complete
+    crew workflow. Deployment semantics are derived afterward from those frozen
+    benchmark predictions: above-gate predictions are preserved exactly and
+    below-gate events are assigned NORMAL without a second model execution.
     """
 
-    name = "adam_full"
+    name = "adam_llm"
 
     def __init__(
         self,
@@ -64,14 +59,13 @@ class ADAMSystem(BaselineSystem):
         chain: Optional[Any] = None,
         validator: Optional[Any] = None,
         llm_client: Optional[Any] = None,
+        decision_backend: Optional[Any] = None,
         node_id: str = "node-eval",
-        seed_memory: bool = True,
     ):
         self.config = config or DEFAULT_CONFIG
         self.memory = memory if memory is not None else InMemoryStore()
         self.chain = chain if chain is not None else NullChainClient()
         self.validator = validator if validator is not None else LocalValidator()
-        self.seed_memory = seed_memory
 
         self.node = ADAMNode(
             node_id=node_id,
@@ -80,60 +74,31 @@ class ADAMSystem(BaselineSystem):
             chain=self.chain if self.config.enable_blockchain else None,
             validator=self.validator if self.config.enable_blockchain else None,
             llm_client=llm_client,
+            decision_backend=decision_backend,
         )
         self.traces: List[Any] = []
 
     def fit(self, train: Sequence[LabeledEvent]) -> None:
-        """Warm the Sensor Agent's baseline and seed semantic memory.
+        """ADAM has no supervised fit step in the reference benchmark.
 
-        Only sub-threshold training readings feed the baseline, and only
-        training-fold events seed memory - a held-out trial is never visible.
+        The experiment harness still rebuilds the stateful runtime per held-out
+        trial. Sensor history and semantic memory then accumulate only from
+        events already processed in that held-out replay; training-fold labels
+        and measurements are not used to warm either state.
         """
-        for e in train:
-            if e.primary.methane_ppm < self.config.threshold_ppm:
-                self.node.sensor.observe(e.primary)
-
-        if self.seed_memory and self.config.enable_weaviate:
-            from adam.schemas import DecisionObject, EventTrace
-            from adam.mechanisms import fuse_readings
-
-            for e in train[:: max(1, len(train) // 200)]:
-                fusion = fuse_readings(list(e.readings))
-                trace = EventTrace(
-                    event_id=f"seed-{e.trial_id}-{e.event_index}",
-                    timestamp=e.timestamp,
-                    trigger_node=e.primary.node_id,
-                    trigger_ppm=e.primary.methane_ppm,
-                    fused_ppm=fusion.fused_ppm,
-                    decision=DecisionObject(
-                        classification="ANOMALY" if e.label == 1 else "NORMAL",
-                        confidence=0.9,
-                        severity="HIGH" if e.label == 1 else "NONE",
-                        reasoning="historical training-fold outcome",
-                        recommended_action="raise alert" if e.label else "monitor",
-                        contributing_factors=["training fold"],
-                        requires_human_review=False,
-                    ),
-                    governance_valid=True,
-                    final_action="raise alert" if e.label else "monitor",
-                    governance_reason=(
-                        "confirmed release" if e.label else "no release found"
-                    ),
-                )
-                self.memory.persist_trace(trace)
+        return None
 
     def predict(self, event: LabeledEvent) -> Prediction:
         t0 = time.perf_counter()
         local = event.primary
 
+        # Snapshot temporal context before ingesting the current reading.
+        baseline_before = self.node.sensor.baseline
         triggered = self.node.sensor.observe(local) == 1
 
-        # Gated mode is the deployment semantics: a sub-threshold reading never
-        # forms a crew and is scored NORMAL on the fast path. Full-pipeline
-        # mode is the benchmark semantics: every labeled event is replayed
-        # through the complete crew workflow so that all systems classify the
-        # same 2,000 events under identical conditions. The deposited runs are
-        # D1_RawTrigger_Log (gated) and 06A_Event_Predictions (full pipeline).
+        # Full-pipeline mode is the benchmark semantics. The legacy gated branch
+        # is retained only for non-manuscript compatibility; revised manuscript
+        # deployment semantics must be derived from frozen benchmark outputs.
         if self.config.eval_mode == "gated" and not triggered:
             return Prediction(
                 system=self.name,
@@ -147,7 +112,10 @@ class ADAMSystem(BaselineSystem):
         crew_event = self.node.sensor.publish_trigger(local)
         try:
             trace = self.node.handle_event(
-                crew_event, list(event.readings), sample_resources=False
+                crew_event,
+                list(event.readings),
+                sample_resources=False,
+                baseline_window=baseline_before,
             )
         except Exception:
             logger.exception("coordination failed for %s", crew_event.event_id)
@@ -190,9 +158,9 @@ def make_no_aggregator(base: Optional[ADAMConfig] = None, **kw: Any) -> ADAMSyst
     against sensor injection (Section 4.5.1), so this configuration is the one
     an attacker would most like to face.
     """
-    cfg = _ablate(base or DEFAULT_CONFIG, "no_aggregator", enable_aggregator=False)
+    cfg = _ablate(base or DEFAULT_CONFIG, "adam_no_aggregator", enable_aggregator=False)
     sys = ADAMSystem(config=cfg, **kw)
-    sys.name = "no_aggregator"
+    sys.name = "adam_no_aggregator"
     return sys
 
 
@@ -203,10 +171,10 @@ def make_no_llm(base: Optional[ADAMConfig] = None, **kw: Any) -> ADAMSystem:
     establishes that crew coordination alone does not account for ADAM's
     improvement over rule-based monitoring.
     """
-    cfg = _ablate(base or DEFAULT_CONFIG, "no_llm", enable_llm=False)
+    cfg = _ablate(base or DEFAULT_CONFIG, "adam_no_llm", enable_llm=False)
     kw.setdefault("llm_client", None)
     sys = ADAMSystem(config=cfg, **kw)
-    sys.name = "no_llm"
+    sys.name = "adam_no_llm"
     return sys
 
 
@@ -217,9 +185,9 @@ def make_no_blockchain(base: Optional[ADAMConfig] = None, **kw: Any) -> ADAMSyst
     effect is the intended result for an accountability mechanism, not evidence
     that the layer is unnecessary (Section 5.1).
     """
-    cfg = _ablate(base or DEFAULT_CONFIG, "no_blockchain", enable_blockchain=False)
+    cfg = _ablate(base or DEFAULT_CONFIG, "adam_no_blockchain", enable_blockchain=False)
     sys = ADAMSystem(config=cfg, **kw)
-    sys.name = "no_blockchain"
+    sys.name = "adam_no_blockchain"
     return sys
 
 
@@ -229,18 +197,17 @@ def make_no_weaviate(base: Optional[ADAMConfig] = None, **kw: Any) -> ADAMSystem
     Section 4.1: F1 falls to 0.868. The rest of the pipeline is preserved, so
     the drop isolates the contribution of h_past in Equation (3).
     """
-    cfg = _ablate(base or DEFAULT_CONFIG, "no_weaviate", enable_weaviate=False)
-    kw.setdefault("seed_memory", False)
+    cfg = _ablate(base or DEFAULT_CONFIG, "adam_no_weaviate", enable_weaviate=False)
     sys = ADAMSystem(config=cfg, **kw)
-    sys.name = "no_weaviate"
+    sys.name = "adam_no_weaviate"
     return sys
 
 
 ABLATION_FACTORIES = {
-    "no_aggregator": make_no_aggregator,
-    "no_llm": make_no_llm,
-    "no_blockchain": make_no_blockchain,
-    "no_weaviate": make_no_weaviate,
+    "adam_no_aggregator": make_no_aggregator,
+    "adam_no_llm": make_no_llm,
+    "adam_no_blockchain": make_no_blockchain,
+    "adam_no_weaviate": make_no_weaviate,
 }
 
 

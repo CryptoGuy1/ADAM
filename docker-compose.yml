@@ -5,7 +5,7 @@
 #   ollama pull gemma3:1b
 services:
   weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.32.2
+    image: cr.weaviate.io/semitechnologies/weaviate:1.30.2
     restart: unless-stopped
     ports:
       - "8080:8080"

@@ -35,9 +35,12 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 from ..config import (
     CHAIN_RPC_URL,
     CONTRACT_ADDRESSES,
+    CRITICAL_THRESHOLD_PPM,
+    PERMITTED_ACTIONS,
     SAME_EVENT_WINDOW_S,
     SEVERITY_LEVELS,
     THRESHOLD_PPM,
+    WARNING_THRESHOLD_PPM,
     quorum,
 )
 from ..schemas import CrewEvent, DecisionObject, EventTrace
@@ -61,12 +64,11 @@ class GovernancePolicy:
     #: Screening threshold. Contract: ``screeningThreshold``.
     screening_threshold_ppm: float = THRESHOLD_PPM
 
-    #: Concentration above which an event is critical. 5x the screening
-    #: threshold, i.e. 10% of the LEL.
-    critical_threshold_ppm: float = 5000.0
+    #: Concentration above which an event is critical in the prototype policy.
+    critical_threshold_ppm: float = CRITICAL_THRESHOLD_PPM
 
     #: Concentration above which an event is a warning. 3x screening.
-    warning_threshold_ppm: float = 3000.0
+    warning_threshold_ppm: float = WARNING_THRESHOLD_PPM
 
     #: Coalescing window for repeat events at one location, seconds.
     same_event_window_s: int = SAME_EVENT_WINDOW_S
@@ -79,14 +81,7 @@ class GovernancePolicy:
     min_confidence: float = 0.35
 
     #: Actions an agent may recommend without operator confirmation.
-    permitted_actions: Tuple[str, ...] = (
-        "monitor",
-        "continue monitoring",
-        "raise alert",
-        "dispatch inspection",
-        "escalate",
-        "log only",
-    )
+    permitted_actions: Tuple[str, ...] = PERMITTED_ACTIONS
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -202,6 +197,35 @@ class NullChainClient:
         pass
 
 
+class InMemoryChainClient:
+    """Acknowledging ledger adapter for offline *nominal-path* experiments.
+
+    This adapter preserves the same ``ChainClient.log_decision`` call boundary
+    used by the runtime and returns a deterministic local receipt so an approved
+    event is not falsely marked as a persistence failure during an offline
+    classification experiment. It is **not** a blockchain implementation and
+    its receipts are not evidence of Fides Innova latency, availability, or
+    immutability. Hardware/deployment claims must use the real chain records.
+    """
+
+    def __init__(self) -> None:
+        self.records: List[Dict[str, Any]] = []
+
+    def log_decision(self, event, decision, final_action, outcome) -> Optional[str]:
+        receipt = f"memory://decision/{len(self.records) + 1}"
+        self.records.append({
+            "receipt": receipt,
+            "event_id": event.event_id,
+            "decision": decision.to_dict(),
+            "final_action": final_action,
+            "approved": bool(getattr(outcome, "approved", False)),
+        })
+        return receipt
+
+    def close(self) -> None:
+        pass
+
+
 class FidesInnovaClient:
     """web3.py client for the Fides Innova PoA testnet.
 
@@ -271,6 +295,46 @@ class FidesInnovaClient:
         self._contracts[name] = contract
         return contract
 
+    def validate(self, decision: DecisionObject, event: CrewEvent) -> Tuple[bool, str]:
+        """Evaluate ``GovernanceRules.validateDecision`` through ``eth_call``.
+
+        This is the real-chain counterpart of :class:`LocalValidator`.  It is a
+        read-only contract call, so validation itself does not create a
+        transaction.  The subsequent :meth:`log_decision` write commits the
+        validated outcome to ``DecisionLogger``.  A runtime that requires
+        blockchain-backed policy validation can therefore pass the same
+        ``FidesInnovaClient`` instance as both ``validator`` and ``chain`` to
+        :class:`adam.crew.ADAMNode`.
+
+        Crew quorum is supplied from the ballots already recorded on
+        ``event``.  The Coordinator also checks quorum locally before action
+        release; the contract repeats it as defense in depth.
+        """
+        if self._w3 is None:
+            self.connect()
+
+        try:
+            rules = self._load_contract("GovernanceRules")
+            valid, reason = rules.functions.validateDecision(
+                int(round(event.trigger_ppm)),
+                int(round(decision.confidence * 100)),
+                decision.classification,
+                decision.severity,
+                decision.recommended_action,
+                bool(decision.requires_human_review),
+                bool(decision.degraded_mode),
+                len(event.votes),
+                int(event.approvals),
+            ).call()
+            return bool(valid), str(reason)
+        except Exception as exc:
+            # A governance service failure must fail closed.  Returning False
+            # lets the Coordinator record the reason and withhold execution;
+            # silently falling back to local approval here would weaken the
+            # manuscript's real-chain governance semantics.
+            logger.exception("on-chain governance validation failed for event %s", event.event_id)
+            return False, f"on-chain governance validation unavailable: {type(exc).__name__}"
+
     def log_decision(
         self,
         event: CrewEvent,
@@ -328,5 +392,6 @@ __all__ = [
     "GovernancePolicy",
     "LocalValidator",
     "NullChainClient",
+    "InMemoryChainClient",
     "FidesInnovaClient",
 ]

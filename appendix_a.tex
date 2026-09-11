@@ -1,0 +1,183 @@
+% ==========================================================================
+%  Appendix A - GENERATED FILE. Do not hand-edit.
+%  Produced by: python -m adam.llm.prompt --latex > appendix_a.tex
+%  Regenerate whenever adam/llm/prompt.py changes so that the manuscript and
+%  the runtime prompt cannot diverge.
+% ==========================================================================
+
+The Decision Agent invokes Gemma~3 1B (INT4) locally through Ollama at
+temperature $0.1$ with a 256-token response limit (Section~\ref{sec:deployment}).
+Listing~\ref{lst:system-prompt} gives the system prompt, Listing~\ref{lst:user-prompt}
+the per-event user message rendered for a synthetic illustrative event, and
+Listing~\ref{lst:schema} the JSON schema every response must satisfy. The
+example is not a D1 or D2 observation and its historical cases are synthetic. On a
+schema violation the agent issues the single repair instruction in
+Listing~\ref{lst:repair}; if that also fails, or if the model does not respond
+within the 30-second decision deadline, the pipeline reverts to deterministic
+threshold logic and records \texttt{degraded\_mode=true} in the event trace.
+
+\begin{lstlisting}[style=adamcode,caption={Decision Agent system prompt.},label={lst:system-prompt}]
+You are the Decision Agent of a methane monitoring crew running on an edge node.
+
+Return ONLY a single JSON object. No prose, no markdown fences, no commentary.
+
+Your task is to interpret one candidate methane event using the fused cross-node
+estimate, the recent baseline for this location, and similar historical cases
+retrieved from the crew's semantic memory. You then recommend an action, which a
+separate Coordinator Agent validates against governance policy before anything
+executes. You do not execute actions yourself.
+
+The screening threshold of 1000 ppm is what caused this event to be
+raised for review. It is NOT the classification rule. A reading above it may
+still be NORMAL if the baseline is elevated, the cross-node estimate disagrees
+with the triggering node, or historical cases at similar concentrations were
+benign. A reading near it may be an ANOMALY if it departs sharply from the
+recent baseline or corroborating nodes.
+
+Weigh the evidence in this order:
+1. Agreement between the triggering node and the fused cross-node estimate. A
+   large gap suggests a single-node fault rather than a real release.
+2. Departure from the recent baseline window for this location.
+3. Precedent from the retrieved historical cases.
+4. Absolute concentration.
+
+Emit exactly these seven fields:
+
+  classification         ANOMALY | NORMAL
+  confidence             number in [0, 1]
+  severity               NONE | LOW | MODERATE | HIGH | CRITICAL
+  reasoning              at most two sentences citing the specific evidence used
+  recommended_action     exactly one permitted action: monitor | continue monitoring | raise alert | dispatch inspection | escalate | log only
+  contributing_factors   array of at most 3 short strings
+  requires_human_review  boolean
+
+Set requires_human_review to true when confidence is below 0.6, when the
+cross-node dispersion exceeds half the fused estimate, or when severity is
+CRITICAL.
+
+Return ONLY the JSON object.
+\end{lstlisting}
+
+\begin{lstlisting}[style=adamcode,caption={Per-event user message for a synthetic illustrative triggered event (not a D1/D2 observation).},label={lst:user-prompt}]
+EVENT
+  triggering node:  node-02
+  triggering value: 1412.0 ppm
+
+CROSS-NODE CONTEXT
+  fused estimate:   1087.7 ppm
+  dispersion:       450.6 ppm
+  disagreeing nodes: node-04
+  per-node readings:
+  node-01: 1298.0 ppm (weight 1.606e-4)
+  node-02: 1412.0 ppm (weight 1.513e-4)
+  node-03: 1355.0 ppm (weight 1.563e-4)
+  node-04: 331.0 ppm (weight 1.647e-4)
+
+RECENT BASELINE
+  window mean:      328.0 ppm over 6 samples
+  fused / baseline: 3.32x
+
+RETRIEVED HISTORICAL CASES
+  1. 1290 ppm on synthetic case A -> ANOMALY (confirmed release, valve seal)
+  2. 1408 ppm on synthetic case B -> ANOMALY (confirmed release)
+  3. 1102 ppm on synthetic case C -> NORMAL (elevated ambient, no leak found)
+
+Return ONLY the JSON object.
+\end{lstlisting}
+
+\begin{lstlisting}[style=adamcode,caption={Structured output schema. Responses failing validation trigger one format-repair retry.},label={lst:schema}]
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ADAM Decision Object",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "classification",
+    "confidence",
+    "severity",
+    "reasoning",
+    "recommended_action",
+    "contributing_factors",
+    "requires_human_review"
+  ],
+  "properties": {
+    "classification": {
+      "enum": [
+        "ANOMALY",
+        "NORMAL"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "severity": {
+      "enum": [
+        "NONE",
+        "LOW",
+        "MODERATE",
+        "HIGH",
+        "CRITICAL"
+      ]
+    },
+    "reasoning": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "recommended_action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "contributing_factors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 3
+    },
+    "requires_human_review": {
+      "type": "boolean"
+    }
+  }
+}
+\end{lstlisting}
+
+\begin{lstlisting}[style=adamcode,caption={Format-repair instruction, issued at most once per event.},label={lst:repair}]
+Your previous response was not a single valid JSON object with the required fields.
+
+Required fields, all seven, nothing else:
+  - classification
+  - confidence
+  - severity
+  - reasoning
+  - recommended_action
+  - contributing_factors
+  - requires_human_review
+
+classification must be one of ANOMALY | NORMAL.
+severity must be one of NONE | LOW | MODERATE | HIGH | CRITICAL.
+confidence must be a number between 0 and 1.
+requires_human_review must be true or false.
+contributing_factors must be an array of strings.
+recommended_action must be exactly one of: monitor | continue monitoring | raise alert | dispatch inspection | escalate | log only.
+
+Re-emit your assessment as ONLY a JSON object. No fences, no prose.
+\end{lstlisting}
+
+\begin{lstlisting}[style=adamcode,caption={Valid response for the synthetic illustrative event.},label={lst:example}]
+{
+  "classification": "ANOMALY",
+  "confidence": 0.82,
+  "severity": "HIGH",
+  "reasoning": "Three of four nodes agree near 1,350 ppm while node-04 reads 331 ppm and is flagged as disagreeing, so the fused estimate of 1,088 ppm understates the corroborated concentration. Two retrieved cases at comparable readings were confirmed releases.",
+  "recommended_action": "dispatch inspection",
+  "contributing_factors": [
+    "3 of 4 nodes agree near 1350 ppm",
+    "node-04 flagged as disagreeing",
+    "2 similar historical releases"
+  ],
+  "requires_human_review": false
+}
+\end{lstlisting}

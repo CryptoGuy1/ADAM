@@ -2,12 +2,14 @@
 baselines.systems
 =================
 
-The four comparators of Section 3.4.4.
+Comparator implementations used by the labeled D1 benchmark.
 
-    Static Threshold  fixed 1,000 ppm rule applied to raw MQ-4 readings
-    Random Forest     scikit-learn, three features, LOTO splitting
-    Cloud-Only        remote GPT-4o-mini through the OpenAI API
-    Single-Agent      on-device reasoning without crew coordination
+    Static Threshold         fixed 1,000 ppm rule on the raw MQ-4 channel
+    Random Forest (raw)      three raw-input features, LOTO splitting
+    Random Forest (fused)    fused/context feature set, LOTO splitting
+    Gradient Boosting        fused/context feature set, LOTO splitting
+    Cloud-Only               remote GPT-4o-mini through the OpenAI API
+    Single-Agent             on-device reasoning without crew coordination
 
 Every comparator implements :class:`BaselineSystem`, so the harness scores them
 through one code path and no system gets a bespoke evaluation.
@@ -15,12 +17,19 @@ through one code path and no system gets a bespoke evaluation.
 Ground truth never reaches a comparator: events arrive via
 ``LabeledEvent.agent_view()``, which strips the reference channel.
 
-On the feature set
-------------------
-Section 3.4.4 specifies three features: the current reading, its normalized
-distance from the screening threshold, and a binary threshold indicator. This is
-a lightweight per-node classifier by design - the comparison it supports is
-against single-node rule-based detection, not against a feature-rich model.
+On the feature sets
+-------------------
+The raw Random Forest receives only the triggering-node concentration, its
+normalized distance from the screening threshold, and a binary threshold
+indicator.
+
+The fitted contextual baselines and the fitted Decision-Agent variants use the
+same eight-feature representation: raw concentration, normalized threshold
+distance, threshold indicator, fused concentration, dispersion, causal baseline
+mean, fused-to-baseline ratio, and fused-minus-baseline difference. This is the
+representation preserved by the deposited D1 event records and reproduces the
+reported fitted-model trial results. All temporal features use the same causal
+within-trial six-reading baseline construction.
 """
 
 from __future__ import annotations
@@ -122,7 +131,7 @@ class RandomForestBaseline(BaselineSystem):
     max_depth=5, random_state=42.
     """
 
-    name = "random_forest"
+    name = "random_forest_raw"
 
     def __init__(self, threshold_ppm: float = THRESHOLD_PPM):
         self.threshold_ppm = threshold_ppm
@@ -167,6 +176,281 @@ class RandomForestBaseline(BaselineSystem):
             predicted=pred,
             confidence=conf,
             latency_ms=(time.perf_counter() - t0) * 1000.0,
+        )
+
+
+
+# ---------------------------------------------------------------------------
+# Shared fused-context feature set
+# ---------------------------------------------------------------------------
+
+BASELINE_WINDOW: int = 6
+
+CONTEXTUAL_FEATURE_NAMES: Tuple[str, ...] = (
+    "raw_ppm",
+    "threshold_distance",
+    "threshold_indicator",
+    "fused_ppm",
+    "dispersion_ppm",
+    "baseline_mean",
+    "fused_to_baseline_ratio",
+    "fused_minus_baseline",
+)
+
+# Public aliases retained for compatibility with earlier analysis scripts.
+# Both refer to the same eight-feature contextual representation in the
+# revised manuscript and deposited master workbook.
+DECISION_AGENT_FEATURE_NAMES: Tuple[str, ...] = CONTEXTUAL_FEATURE_NAMES
+FUSED_BASELINE_FEATURE_NAMES: Tuple[str, ...] = CONTEXTUAL_FEATURE_NAMES
+
+
+def fused_context_features(
+    event: LabeledEvent,
+    prior_raw_ppm: Sequence[float],
+    threshold_ppm: float = THRESHOLD_PPM,
+) -> List[float]:
+    """Construct the eight fitted-model features without label leakage.
+
+    ``prior_raw_ppm`` must contain only measurements that precede ``event`` in
+    the same trial. The current reading is appended by the caller *after*
+    feature construction.
+
+    The first event of a trial has no preceding baseline samples, so its current
+    raw reading initializes the baseline value. Subsequent events use at most
+    the preceding six raw readings.
+    """
+    raw_ppm = float(event.primary.methane_ppm)
+    fusion = fuse_readings(event.readings)
+
+    history = list(prior_raw_ppm[-BASELINE_WINDOW:])
+    baseline_mean = (
+        statistics.fmean(history)
+        if history
+        else raw_ppm
+    )
+
+    denominator = (
+        baseline_mean
+        if abs(baseline_mean) > 1e-9
+        else 1e-9
+    )
+
+    return [
+        raw_ppm,
+        (raw_ppm - threshold_ppm) / threshold_ppm,
+        float(raw_ppm >= threshold_ppm),
+        float(fusion.fused_ppm),
+        float(fusion.dispersion_ppm),
+        float(baseline_mean),
+        float(fusion.fused_ppm) / denominator,
+        float(fusion.fused_ppm) - float(baseline_mean),
+    ]
+
+
+def fused_context_matrix(
+    events: Sequence[LabeledEvent],
+    threshold_ppm: float = THRESHOLD_PPM,
+) -> Tuple[List[LabeledEvent], List[List[float]]]:
+    """Return events and the eight Decision-Agent features in trial-time order.
+
+    Baseline history is reset at every trial boundary. No label or NDIR
+    reference value enters the feature vector.
+    """
+    ordered = sorted(
+        events,
+        key=lambda e: (e.trial_id, e.timestamp, e.event_index),
+    )
+
+    history_by_trial: Dict[int, List[float]] = {}
+    X: List[List[float]] = []
+
+    for event in ordered:
+        history = history_by_trial.setdefault(event.trial_id, [])
+
+        X.append(
+            fused_context_features(
+                event,
+                prior_raw_ppm=history,
+                threshold_ppm=threshold_ppm,
+            )
+        )
+
+        # Update only AFTER featurizing the current event.
+        history.append(float(event.primary.methane_ppm))
+
+    return ordered, X
+
+
+def fused_baseline_matrix(
+    events: Sequence[LabeledEvent],
+    threshold_ppm: float = THRESHOLD_PPM,
+) -> Tuple[List[LabeledEvent], List[List[float]]]:
+    """Compatibility wrapper for the eight-feature contextual matrix.
+
+    The function name is retained because older scripts imported it. The
+    revised manuscript and deposited trial records show that the reported
+    Random Forest (fused/contextual) and Gradient Boosting (fused/contextual)
+    results use the same eight-feature contextual representation as the fitted
+    Decision-Agent substitutions, not a three-feature subset.
+    """
+    return fused_context_matrix(events, threshold_ppm=threshold_ppm)
+
+
+# ---------------------------------------------------------------------------
+# Random Forest (fused context)
+# ---------------------------------------------------------------------------
+
+
+class RandomForestFusedBaseline(BaselineSystem):
+    """Random Forest over the eight-feature contextual representation.
+
+    The learner uses the same Random Forest hyperparameters as the raw-input
+    model. Leave-one-trial-out splitting is provided by the experiment harness.
+    """
+
+    name = "random_forest_fused"
+
+    def __init__(self, threshold_ppm: float = THRESHOLD_PPM):
+        self.threshold_ppm = threshold_ppm
+        self._model: Optional[Any] = None
+
+    def fit(self, train: Sequence[LabeledEvent]) -> None:
+        try:
+            from sklearn.ensemble import RandomForestClassifier
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError(
+                "scikit-learn is required for the fused RF baseline"
+            ) from exc
+
+        ordered, X = fused_baseline_matrix(
+            train,
+            threshold_ppm=self.threshold_ppm,
+        )
+        y = [event.label for event in ordered]
+
+        self._model = RandomForestClassifier(**RF_PARAMS)
+        self._model.fit(X, y)
+
+    def predict_all(
+        self,
+        events: Sequence[LabeledEvent],
+    ) -> List[Prediction]:
+        if self._model is None:
+            raise RuntimeError(f"{self.name} has not been fitted")
+
+        ordered, X = fused_baseline_matrix(
+            events,
+            threshold_ppm=self.threshold_ppm,
+        )
+
+        out: List[Prediction] = []
+
+        for event, features in zip(ordered, X):
+            t0 = time.perf_counter()
+
+            pred = int(self._model.predict([features])[0])
+            proba = self._model.predict_proba([features])[0]
+            confidence = (
+                float(proba[1])
+                if len(proba) > 1
+                else float(proba[0])
+            )
+
+            out.append(
+                Prediction(
+                    system=self.name,
+                    trial_id=event.trial_id,
+                    event_index=event.event_index,
+                    predicted=pred,
+                    confidence=confidence,
+                    latency_ms=(time.perf_counter() - t0) * 1000.0,
+                )
+            )
+
+        return out
+
+    def predict(self, event: LabeledEvent) -> Prediction:
+        raise RuntimeError(
+            "random_forest_fused requires trial-ordered predict_all() "
+            "so the six-reading baseline remains causal"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Gradient Boosting (fused context)
+# ---------------------------------------------------------------------------
+
+
+class GradientBoostingFusedBaseline(BaselineSystem):
+    """Gradient Boosting over the eight-feature contextual representation."""
+
+    name = "gradient_boosting_fused"
+
+    def __init__(self, threshold_ppm: float = THRESHOLD_PPM):
+        self.threshold_ppm = threshold_ppm
+        self._model: Optional[Any] = None
+
+    def fit(self, train: Sequence[LabeledEvent]) -> None:
+        try:
+            from sklearn.ensemble import GradientBoostingClassifier
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError(
+                "scikit-learn is required for the fused GBM baseline"
+            ) from exc
+
+        ordered, X = fused_baseline_matrix(
+            train,
+            threshold_ppm=self.threshold_ppm,
+        )
+        y = [event.label for event in ordered]
+
+        self._model = GradientBoostingClassifier(
+            random_state=42,
+        )
+        self._model.fit(X, y)
+
+    def predict_all(
+        self,
+        events: Sequence[LabeledEvent],
+    ) -> List[Prediction]:
+        if self._model is None:
+            raise RuntimeError(f"{self.name} has not been fitted")
+
+        ordered, X = fused_baseline_matrix(
+            events,
+            threshold_ppm=self.threshold_ppm,
+        )
+
+        out: List[Prediction] = []
+
+        for event, features in zip(ordered, X):
+            t0 = time.perf_counter()
+
+            pred = int(self._model.predict([features])[0])
+            proba = self._model.predict_proba([features])[0]
+            confidence = (
+                float(proba[1])
+                if len(proba) > 1
+                else float(proba[0])
+            )
+
+            out.append(
+                Prediction(
+                    system=self.name,
+                    trial_id=event.trial_id,
+                    event_index=event.event_index,
+                    predicted=pred,
+                    confidence=confidence,
+                    latency_ms=(time.perf_counter() - t0) * 1000.0,
+                )
+            )
+
+        return out
+
+    def predict(self, event: LabeledEvent) -> Prediction:
+        raise RuntimeError(
+            "gradient_boosting_fused requires trial-ordered predict_all() "
+            "so the six-reading baseline remains causal"
         )
 
 
@@ -391,6 +675,15 @@ __all__ = [
     "BaselineSystem",
     "StaticThreshold",
     "RandomForestBaseline",
+    "RandomForestFusedBaseline",
+    "GradientBoostingFusedBaseline",
+    "CONTEXTUAL_FEATURE_NAMES",
+    "FUSED_BASELINE_FEATURE_NAMES",
+    "DECISION_AGENT_FEATURE_NAMES",
+    "BASELINE_WINDOW",
+    "fused_context_features",
+    "fused_context_matrix",
+    "fused_baseline_matrix",
     "CloudOnly",
     "SingleAgent",
     "loto_predictions",
