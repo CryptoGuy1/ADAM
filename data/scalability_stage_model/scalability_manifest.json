@@ -1,0 +1,89 @@
+{
+  "schema": "adam.scalability.stage_model.v2",
+  "input_path": "data/scalability_hardware_v14.csv",
+  "input_sha256": "d71beacd3a35b8e1504d877ef3fa9c92f35f4fe3184f1b7e65ea7c47288cbdf5",
+  "calibration": "only 72 physical Pi measurements, N=1..4",
+  "historical_archived_simulation_used_for_calibration": false,
+  "strict_lolo_validation": {
+    "method": "strict leave-one-physical-node-level-out stage prediction",
+    "level_count": 4,
+    "mape_pct": 1.3330010279821043,
+    "signed_mean_percentage_error_pct": -1.0827672915134952,
+    "mae_ms": 244.31587301587206,
+    "mean_sum_absolute_stage_error_ms": 414.5341269841273,
+    "stage_mae_ms": {
+      "T_cross_node_ms": 54.364484126984145,
+      "T_network_ms": 11.020833333333336,
+      "T_merge_ms": 6.11825396825396,
+      "T_query_ms": 7.783333333333331,
+      "T_reason_ms": 318.0402777777781,
+      "T_blockchain_ms": 17.20694444444443
+    },
+    "note": "Aggregate error may mask stage errors; compare validation methods separately."
+  },
+  "reference_model": {
+    "model": "T_j(N)=observed N4 vector + max(0,OLS stage slope)*(N-4), j=cross/network/merge; fixed other stages",
+    "physical_calibration_levels": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "anchor_level": 4,
+    "empirical_resampling": "18 physical records per level with replacement; paired full N4 stage vector per replicate",
+    "simulated_node_counts": [
+      4,
+      6,
+      8,
+      12,
+      16
+    ],
+    "replicates_per_level": 18,
+    "random_seed": 42,
+    "fixed_workload": {
+      "concurrent_events": 4,
+      "logical_sensor_streams": 8,
+      "logical_workers": 4,
+      "database_vectors": 30000,
+      "blockchain_requests_per_event": 1,
+      "arrival_process": "one simultaneous four-event batch",
+      "reasoning_workers_added_for_logical_nodes": 0
+    },
+    "assumptions": [
+      "no additional reasoning workers or inference demand",
+      "shared database fixed at 30000 vectors",
+      "one decision-recording request per event",
+      "no additional WAN loss, queue, capacity change or network partition",
+      "outputs beyond 4 physical nodes are conditional software estimates"
+    ]
+  },
+  "descriptive_fits": {
+    "linear": {
+      "intercept_ms": 18178.572716049384,
+      "slope_ms_per_node": 169.4665432098763,
+      "r_squared_level_means": 1.0
+    },
+    "power_law": {
+      "T0_ms": 18178.572716049362,
+      "alpha_ms": 169.46654320988307,
+      "beta": 0.999999999999988,
+      "r_squared_level_means": 1.0,
+      "warning": "descriptive fit to five model-generated means; no extrapolation guarantee"
+    }
+  },
+  "outputs": {
+    "strict_lolo": {
+      "file": "strict_lolo_validation.csv",
+      "sha256": "560f6bbc0a498ef79e1affeb100ef3e711e0b9057a7536bb015e95e518b56650"
+    },
+    "reference_model_runs": {
+      "file": "stage_scaleout_reference_model.csv",
+      "sha256": "e9d2003550eb06cfecbf5c29b2dd7c38b58af700b52003157dba75cfae375bcf"
+    },
+    "model_level_means": {
+      "file": "stage_scaleout_level_means.csv",
+      "sha256": "7b8497692c9beeb577140a96010b70e8b9e215b14f2b3b1b5bf6cf5cd49836b1"
+    }
+  },
+  "provenance_warning": "New reference-model output; not May 2025 measurements or reproduction of archived simulated outputs."
+}

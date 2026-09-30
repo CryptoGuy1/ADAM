@@ -2,7 +2,7 @@
 #
 # Important evidence distinction:
 # - `make recompute` verifies the deposited workbook and regenerates the current
-#   data-driven manuscript figures. It does NOT re-execute the historical
+#   data-driven manuscript figures, including stage-model Figure 7. It does NOT re-execute the historical
 #   physical experiment or re-fuse D1 from raw N1-N4 streams.
 # - `make reference-rerun` requires the original concurrent four-node D1 event
 #   stream plus the runtime services needed by the selected systems.
@@ -19,7 +19,7 @@ DEPOSIT_FIGURES ?= figures
 .PHONY: help install test verify verify-manuscript fixture export-primary-data check-data \
         appendix appendix-file offline recompute deposit-figures diagnostics \
         trials substitution degraded-inputs deployment-replay scalability-reference \
-        security-reference reference-rerun contracts clean reproduce phase5-audit stats publication-figures release-audit
+        security-reference reference-rerun contracts clean reproduce phase5-audit stats publication-figures release-audit scalability-figure7
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -32,7 +32,7 @@ install:  ## install Python and Node dependencies (creates local npm metadata if
 verify:  ## check code constants against manuscript-derived invariants
 	$(PY) -m adam.config
 
-verify-manuscript:  ## verify all workbook-backed reported quantities and test families
+verify-manuscript:  ## verify workbook quantities, current stage-model estimates, and test families
 	$(PY) scripts/verify_manuscript_numbers.py $(DEPOSIT)
 
 test: verify  ## run manuscript-parity and runtime regression tests
@@ -57,7 +57,7 @@ appendix-file:  ## regenerate repository appendix_a.tex from live code
 # Deposited-evidence path: no hardware, Ollama, RPC, or raw N1-N4 stream needed
 # ---------------------------------------------------------------------------
 
-deposit-figures:  ## regenerate current data-driven manuscript figures from workbook
+deposit-figures:  ## regenerate workbook figures and current stage-model Figure 7
 	mkdir -p $(DEPOSIT_FIGURES)
 	$(PY) scripts/figure3_confusion_matrices.py $(DEPOSIT) $(DEPOSIT_FIGURES)
 	$(PY) scripts/figure4_operating_point.py $(DEPOSIT) $(DEPOSIT_FIGURES)
@@ -65,7 +65,7 @@ deposit-figures:  ## regenerate current data-driven manuscript figures from work
 	$(PY) scripts/figure_degraded_conditions.py $(DEPOSIT) $(DEPOSIT_FIGURES)
 	$(PY) scripts/figure5_coordination.py $(DEPOSIT) $(DEPOSIT_FIGURES)
 	@echo "Resource Figure 8 requires the Phase 5 source audit; legacy figure6 is not a publication figure."
-	$(PY) scripts/figure7_scalability.py $(DEPOSIT) $(DEPOSIT_FIGURES)
+	$(MAKE) scalability-figure7
 	@echo "Security Figure 10 requires the Phase 5 source audit; legacy figure8 is not a publication figure."
 
 phase5-audit:  ## verify approved V14 security/resource records and generate source-linked figure candidates
@@ -127,3 +127,8 @@ contracts:  ## compile and test governance contracts
 clean:
 	rm -rf $(RESULTS) $(DEPOSIT_FIGURES) blockchain/artifacts blockchain/cache
 	find . -name __pycache__ -type d -exec rm -rf {} +
+
+# Current manuscript scale-out series: measured input, generated software output.
+scalability-figure7:  ## regenerate stage-model outputs and current publication Figure 7
+	$(PY) -m experiments.scalability_stage_model --hardware data/scalability_hardware_v14.csv --out data/scalability_stage_model --seed 42 --replicates 18
+	$(PY) scripts/figure7_scalability_stage.py --hardware data/scalability_hardware_v14.csv --results data/scalability_stage_model --out $(DEPOSIT_FIGURES)

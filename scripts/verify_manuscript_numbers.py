@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Verify every quantitative claim in the article's Results section against the
-deposited workbook. Exits non-zero on any mismatch.
+deposited workbook and hardware-calibrated stage model. Exits non-zero on any mismatch.
 
 Usage:  python scripts/verify_manuscript_numbers.py [workbook.xlsx]
 
@@ -203,36 +203,42 @@ for sysname, (cpu, ram, bw) in TABLE6.items():
     chk(f"4.3 {sysname} RAM", S(sysname, "RAM_MB")[0], ram, 1)
     chk(f"4.3 {sysname} BW", S(sysname, "Bandwidth_KB_per_60s_4nodes")[0], bw, 0.05)
 
-# ---------------------------------------------------------------- 4.4
+# ---------------------------------------------------------------- 4.4: current stage model
+from experiments.scalability_stage_model import (
+    STAGES, load_hardware, simulate_scaleout, strict_leave_one_level_out, summarize,
+)
 sc = pd.read_excel(xl, "08_Scalability_Log")
 hw = sc[sc["Run_Mode"] == "HARDWARE"]
-sim = sc[sc["Run_Mode"] == "PYTHON_SIMULATION"]
-so = sc[(sc["Fit_Eligible"].astype(str).str.lower() == "yes") & (sc["Node_Count"] >= 4)]
+hardware_path = ROOT / "data" / "scalability_hardware_v14.csv"
+hardware_csv = pd.read_csv(hardware_path)
+if set(hw.Run_ID) != set(hardware_csv.Run_ID):
+    raise ValueError("Workbook and scale-model hardware Run_ID sets differ")
+workbook_hardware = hw.set_index("Run_ID").loc[hardware_csv.Run_ID]
+for field in (*STAGES, "T_decision_ms", "Node_Count"):
+    if not np.allclose(workbook_hardware[field].to_numpy(), hardware_csv[field].to_numpy(), rtol=0, atol=1e-8):
+        raise ValueError("Workbook and scale-model hardware differ: " + field)
 hm = hw.groupby("Node_Count")["T_decision_ms"].mean()
-sm = so.groupby("Node_Count")["T_decision_ms"].mean()
-im = sim.groupby("Node_Count")["T_decision_ms"].mean()
 chk("4.4 HW N=1 (s)", hm[1] / 1e3, CLAIMS["checks"]['4.4 HW N=1 (s)'], 0.005)
 chk("4.4 HW N=4 (s)", hm[4] / 1e3, CLAIMS["checks"]['4.4 HW N=4 (s)'], 0.005)
 chk("4.4 HW growth %", 100 * (hm[4] / hm[1] - 1), CLAIMS["checks"]['4.4 HW growth %'], 0.05)
-chk("4.4 SO N=4 (s)", sm[4] / 1e3, CLAIMS["checks"]['4.4 SO N=4 (s)'], 0.005)
-chk("4.4 SO N=16 (s)", sm[16] / 1e3, CLAIMS["checks"]['4.4 SO N=16 (s)'], 0.005)
-chk("4.4 SO growth %", 100 * (sm[16] / sm[4] - 1), CLAIMS["checks"]['4.4 SO growth %'], 0.05)
-chk("4.4 overall growth %", 100 * (sm[16] / hm[1] - 1), CLAIMS["checks"]['4.4 overall growth %'], 0.05)
-chk("4.4 margin at N=16 (s)", DECISION_DEADLINE_S - sm[16] / 1e3, CLAIMS["checks"]['4.4 margin at N=16 (s)'], 0.05)
-rel = [(im[k] - hm[k]) / hm[k] * 100 for k in [1, 2, 3, 4]]
-chk("4.4 MAPE %", np.mean(np.abs(rel)), CLAIMS["checks"]['4.4 MAPE %'], 0.01)
-chk("4.4 bias %", np.mean(rel), CLAIMS["checks"]['4.4 bias %'], 0.01)
-chk("4.4 worst level dev % (N=2)", rel[1], CLAIMS["checks"]['4.4 worst level dev % (N=2)'], 0.05)
-from scipy.optimize import curve_fit
-mdl = lambda N, t0, a, b: t0 + a * N ** b
-for name, df in (("HW", hw), ("SO", so)):
-    want = CLAIMS["tables"]["FIT_PARAMS"][name]
-    g = df.groupby("Node_Count")["T_decision_ms"].mean()
-    pw, _ = curve_fit(mdl, g.index.astype(float), g.values, p0=[15000, 500, 1.0], maxfev=60000)
-    for pname, got, want_ in zip(("T0", "alpha", "beta"), pw, want):
-        chk(f"4.4 {name} fit {pname}", got, want_, max(abs(want_) * 0.005, 0.005))
-gm = hw.groupby("Node_Count")[["T_reason_ms", "T_cross_node_ms", "T_network_ms",
-                               "T_merge_ms", "T_query_ms", "T_blockchain_ms"]].mean()
+current = CLAIMS["scalability_stage_model"]
+grouped = load_hardware(hardware_path)
+model_runs, _ = simulate_scaleout(grouped, seed=current["seed"], replicates=current["replicates_per_level"])
+level_means = {row["node_count"]: row for row in summarize(model_runs)}
+for node, values in current["levels_mean_sd_s"].items():
+    row = level_means[int(node)]
+    chk(f"4.4 stage-model N={node} mean (s)", row["mean_ms"] / 1000, values[0], 0.005)
+    chk(f"4.4 stage-model N={node} SD (s)", row["std_ms"] / 1000, values[1], 0.005)
+    chk(f"4.4 stage-model N={node} replicates", row["n"], current["replicates_per_level"], 0)
+validation_rows, validation = strict_leave_one_level_out(grouped)
+for name in ("mape_pct", "signed_mean_percentage_error_pct"):
+    chk("4.4 strict LOLO " + name, validation[name], current["validation"][name], 0.005)
+chk("4.4 strict LOLO MAE (ms)", validation["mae_ms"], current["validation"]["mae_ms"], 0.5)
+worst = max(validation_rows, key=lambda row: row["abs_error_pct"])
+chk("4.4 strict LOLO largest absolute error %", worst["abs_error_pct"], current["validation"]["largest_absolute_error_pct"], 0.005)
+chk("4.4 strict LOLO largest error node", worst["held_out_N"], current["validation"]["largest_absolute_error_node"], 0)
+chk("4.4 stage-model growth %", 100 * (level_means[16]["mean_ms"] / level_means[4]["mean_ms"] - 1), current["growth_pct"], 0.05)
+gm = hw.groupby("Node_Count")[list(STAGES)].mean()
 coord = [c for c in gm.columns if c != "T_reason_ms"]
 chk("4.4 coordination growth (ms)", gm.loc[4, coord].sum() - gm.loc[1, coord].sum(), CLAIMS["checks"]['4.4 coordination growth (ms)'], 1)
 chk("4.4 reasoning growth (ms)", gm.loc[4, "T_reason_ms"] - gm.loc[1, "T_reason_ms"], CLAIMS["checks"]['4.4 reasoning growth (ms)'], 1)
