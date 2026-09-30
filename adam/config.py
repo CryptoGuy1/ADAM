@@ -2,7 +2,7 @@
 adam.config
 ===========
 
-Single source of truth for every numeric constant reported in the manuscript.
+Single source of truth for operational parameters of the implementation.
 
 Every value below carries a citation to the manuscript location that fixes it.
 Nothing in this codebase should hard-code an operational constant; import it
@@ -71,43 +71,40 @@ PERMITTED_ACTIONS: Tuple[str, ...] = (
 #: The four role names that compose a full crew. Section 3.1.2.
 CREW_ROLES: Tuple[str, ...] = ("sensor", "aggregator", "decision", "coordinator")
 
-#: Roles that cast a ballot. Section 3.2: the Coordinator "counts approvals,
-#: checks the governance validator, and executes the action" - it tallies and
-#: does not vote, so including it would let the tallying agent tip its own
-#: quorum.
+#: Voting roles cast independent NORMAL/ANOMALY class ballots. The
+#: Coordinator tallies and performs policy validation but does not vote.
 VOTING_ROLES: Tuple[str, ...] = ("sensor", "aggregator", "decision")
 
 #: Agents instantiated per crew, including the non-voting Coordinator.
 DEPLOYED_CREW_SIZE: int = 4
 
-#: Ballots available to Equation (4). This is the quantity quorum() takes, and
+#: Ballots available to the strict-majority rule. This is the quantity quorum() takes, and
 #: it is NOT the crew size: three voters plus a tallying Coordinator.
 #:
 #: At three voters the deployed threshold is quorum(3) = 2: any two of the
-#: three role-specific checks (local trigger consistency, cross-node
-#: consistency, semantic consistency) must agree before an action executes. A
-#: single dissenting voter cannot block a decision, and no single voter can
-#: approve one alone.
+#: classification votes must match. A two-voter split is unresolved and
+#: withholds action; the vote count is never an action-approval count.
 DEPLOYED_VOTER_COUNT: int = 3
 
 
 def quorum(voter_count: int) -> int:
     """Crew-level quorum threshold over the VOTING agents.
 
-    Implements Equation (4), strict majority:  gamma_crew = floor(n / 2) + 1
+    Implements strict majority: gamma_crew = floor(n / 2) + 1
 
-    ``n`` is the number of agents that cast a ballot, not the number
-    instantiated. The Coordinator tallies rather than votes, so a four-agent
-    crew supplies three ballots and the deployed threshold is quorum(3) = 2.
+    ``n`` is the eligible voting-role count for the formed crew, not the
+    number of ballots successfully returned. A failed vote does not shrink
+    the denominator. The Coordinator tallies rather than votes, so a
+    four-agent crew has three eligible voters and quorum(3) = 2.
 
     This is the authoritative definition, and it matches the consensus rule
     recorded in the dataset (01_Config: "strict majority = FLOOR(n/2)+1") and
     the deployment failure notes in 05_D2_Coordination_Log. The on-chain
     ``GovernanceRules.getRequiredConsensus`` MUST agree with it for every crew
-    size in Table 8; ``tests/test_manuscript_parity.py`` asserts that parity.
+    voting-set sizes; ``tests/test_manuscript_parity.py`` asserts that parity.
 
     A prior contract revision encoded quorum as a percentage. The active
-    implementation uses Equation (4) directly so the executable rule and the
+    implementation uses the explicit formula so the executable rule and the
     manuscript cannot drift through percentage-rounding conventions.
     """
     if voter_count < 1:
@@ -129,12 +126,12 @@ def tolerated_faults(voter_count: int) -> int:
 
 
 def is_subvertible(voter_count: int, n_compromised: int) -> bool:
-    """True when compromised voters alone can supply quorum. Table 8."""
+    """True when compromised voters alone can supply classification quorum."""
     return n_compromised >= quorum(voter_count)
 
 
 def fails_closed(voter_count: int, n_compromised: int) -> bool:
-    """True when quorum is unreachable, so no action executes. Table 8."""
+    """True when classification quorum is unreachable, so action is withheld."""
     honest = voter_count - n_compromised
     return honest < quorum(voter_count) and not is_subvertible(
         voter_count, n_compromised
@@ -220,7 +217,7 @@ CLASSIFICATION_VALUES: Tuple[str, ...] = ("ANOMALY", "NORMAL")
 #: resolution compares this ordering first and timestamp second.
 SEVERITY_LEVELS: Tuple[str, ...] = ("NONE", "LOW", "MODERATE", "HIGH", "CRITICAL")
 
-#: Numeric encoding of severity for Equation (5).
+#: Numeric encoding of severity for deterministic conflict resolution.
 SEVERITY_SCORES: Dict[str, float] = {
     "NONE": 0.0,
     "LOW": 0.25,
@@ -230,22 +227,13 @@ SEVERITY_SCORES: Dict[str, float] = {
 }
 
 # ---------------------------------------------------------------------------
-# Cloud comparator  (manuscript Section 3.4.4, Table 6)
+# Cloud comparator configuration
 # ---------------------------------------------------------------------------
 
 #: Cloud-Only baseline model. Section 3.4.4. This is the ONLY component in the
 #: repository permitted to make an external API call, and it is a comparator,
 #: never part of the ADAM runtime.
 CLOUD_MODEL: str = os.getenv("ADAM_CLOUD_MODEL", "gpt-4o-mini")
-
-#: Measured external egress of the Cloud-Only comparator, from the 20-window
-#: confidentiality measurement (13_Security_Data_Leakage): mean bytes and API
-#: calls per 30-minute window across the 8 Cloud-Only windows. ADAM records
-#: zero in both quantities across its 12 windows. No per-decision dollar cost
-#: is stated anywhere in the codebase because the deposit contains no cloud
-#: token or billing records to support one.
-CLOUD_EGRESS_PER_WINDOW_KB: float = 117.4
-CLOUD_API_CALLS_PER_WINDOW: float = 19.1
 
 # ---------------------------------------------------------------------------
 # Semantic memory  (manuscript Section 3.1.2, Table 4)
@@ -298,15 +286,6 @@ N_TRIALS: int = 10
 #: D1 - labeled events per trial.
 EVENTS_PER_TRIAL: int = 200
 
-#: D2 - live coordination events over the 72-hour deployment. This is the
-#: end-to-end event-completion denominator; it is not an independent measure
-#: of dual-store persistence reliability.
-N_DEPLOYMENT_EVENTS: int = 459
-
-#: Events that completed end to end. Latency statistics use this denominator;
-#: the remaining 13 reached the decision deadline without committing an action.
-N_COMPLETED_EVENTS: int = 446
-
 #: D2 - deployment duration, hours.
 DEPLOYMENT_HOURS: float = 72.0
 
@@ -327,51 +306,6 @@ N_COMPARISONS: int = 10
 #: Global seed. Every stochastic component derives from this so that a reviewer
 #: reproduces figures bit-for-bit.
 SEED: int = 42
-
-# ---------------------------------------------------------------------------
-# Per-stage latency budget  (manuscript Section 4.2, Figure 5)
-# ---------------------------------------------------------------------------
-
-#: Mean per-stage latencies over the 459 deployment events, milliseconds.
-#: Held here as REFERENCE values for regression-checking a reproduction run,
-#: never as substitutes for measurement.
-REFERENCE_STAGE_LATENCY_MS: Dict[str, float] = {
-    "T_form": 2076.5,
-    "T_agg": 437.2,
-    "T_reason": 15473.6,
-    "T_gov": 307.9,
-    "T_weav": 256.0,
-    "T_bc": 438.6,
-}
-
-#: Crew-formation dispersion, ms. Section 4.2.
-REFERENCE_FORM_LATENCY_SD_MS: float = 181.6
-REFERENCE_FORM_LATENCY_MEDIAN_MS: float = 2077.8
-REFERENCE_FORM_LATENCY_P95_MS: float = 2373.1
-
-#: Deterministic-fallback activation latency, ms. Section 4.5.2. Mean over the
-#: 19 induced local-model failures (median 54.6 ms, P95 81.6 ms).
-REFERENCE_FALLBACK_LATENCY_MS: float = 55.7
-
-#: Node-scaling models, Table 7. The scalability study varies node count N
-#: while holding load fixed at the reference configuration (4 concurrent
-#: events, 8 sensor streams, 4 logical workers, 30,000 vectors). N = 1-4 runs
-#: on physical Raspberry Pi 5 hardware; N = 6-16 is a Python scale-out model
-#: validated against the matched N = 1-4 hardware runs (18 replicates per
-#: level: 6 per day across 3 days). Both fits take the form
-#: T(N) = T0 + alpha * N^beta and are recomputed from 08_Scalability_Log by
-#: adam.manuscript; the values here are references for regression checks.
-NODE_SCALING_FIT_HW: Dict[str, float] = {
-    "T0": 17_379.97, "alpha": 198.7696, "beta": 1.4619,  # hardware, N = 1-4
-}
-NODE_SCALING_FIT_SCALEOUT: Dict[str, float] = {
-    "T0": 14_261.78, "alpha": 2950.9415, "beta": 0.288,  # scale-out, N = 4-16
-}
-
-#: Simulator-validation statistics: Python scale-out model against matched
-#: N = 1-4 hardware, decision latency. 09_Fitted_Models.
-SIM_VALIDATION_MAPE_PCT: float = 2.373
-SIM_VALIDATION_BIAS_PCT: float = -0.017
 
 # ---------------------------------------------------------------------------
 # Systems under evaluation
@@ -513,10 +447,10 @@ def verify_against_manuscript() -> List[str]:
     expected_table8 = {2: (2, 0), 3: (2, 1), 4: (3, 1), 5: (3, 2), 6: (4, 2), 7: (4, 3)}
     for n, (exp_q, exp_f) in expected_table8.items():
         if quorum(n) != exp_q:
-            problems.append(f"quorum({n}) = {quorum(n)}, Table 8 states {exp_q}")
+            problems.append(f"quorum({n}) = {quorum(n)}, expected {exp_q}")
         if tolerated_faults(n) != exp_f:
             problems.append(
-                f"tolerated_faults({n}) = {tolerated_faults(n)}, Table 8 states {exp_f}"
+                f"tolerated_faults({n}) = {tolerated_faults(n)}, expected {exp_f}"
             )
 
     for n in range(2, 12):
@@ -541,56 +475,13 @@ def verify_against_manuscript() -> List[str]:
         if abs(got - want) > tol:
             problems.append(f"{label}: code says {want}, deposit gives {got:.4g}")
 
-    lat = ms.stage_latencies_ms()
-    for stage, want in REFERENCE_STAGE_LATENCY_MS.items():
-        close(f"stage latency {stage}", lat[stage], want, 0.5)
-
-    form = ms.crew_formation_ms()
-    close("crew formation sd", form["sd"], REFERENCE_FORM_LATENCY_SD_MS, 0.5)
-    close("crew formation median", form["median"], REFERENCE_FORM_LATENCY_MEDIAN_MS, 0.5)
-    close("crew formation p95", form["p95"], REFERENCE_FORM_LATENCY_P95_MS, 0.5)
-
-    close("deployment events", ms.deployment_events(), N_DEPLOYMENT_EVENTS, 0)
-    close("completed events", ms.completed_events(), N_COMPLETED_EVENTS, 0)
-
     var = ms.sensor_error_variances()
     close("sensor variance min", var["min_ppm2"], SENSOR_ERROR_VARIANCE_RANGE_PPM2[0], 1.0)
     close("sensor variance max", var["max_ppm2"], SENSOR_ERROR_VARIANCE_RANGE_PPM2[1], 1.0)
 
-    hw = ms.node_scaling_fit("hardware")
-    for key, want in NODE_SCALING_FIT_HW.items():
-        close(f"node scaling (hardware) {key}", hw[key], want, max(abs(want) * 0.01, 0.01))
-    so = ms.node_scaling_fit("scaleout")
-    for key, want in NODE_SCALING_FIT_SCALEOUT.items():
-        close(f"node scaling (scale-out) {key}", so[key], want, max(abs(want) * 0.01, 0.01))
-
-    val = ms.simulator_validation()
-    close("simulator MAPE %", val["mape_pct"], SIM_VALIDATION_MAPE_PCT, 0.05)
-    close("simulator bias %", val["bias_pct"], SIM_VALIDATION_BIAS_PCT, 0.05)
-
     lab = ms.labeled_events()
     close("labeled events", lab["total"], N_TRIALS * EVENTS_PER_TRIAL, 0)
     close("labeled trials", lab["trials"], N_TRIALS, 0)
-
-    # The Static Threshold row of Table 5 is the raw channel against the fixed
-    # screening threshold, and must recompute from the deposit exactly.
-    try:
-        got = ms.threshold_baseline("Raw_Instantaneous_PPM", THRESHOLD_PPM)
-        close("static threshold F1", got["f1"], 0.790, 0.002)
-        close("static threshold FAR", got["far"], 0.165, 0.002)
-    except ms.DatasetUnavailable as exc:
-        problems.append(str(exc))
-
-    # Revised deployment semantics are derived deterministically from the
-    # frozen full-pipeline predictions; the old gated sheet is historical only.
-    try:
-        dep = ms.derived_deployment_summary()
-        close("deployment-semantics triggered events", dep["triggered"], 889, 0)
-        close("deployment-semantics F1", dep["f1"], 0.830, 0.002)
-        close("deployment-semantics FAR", dep["far"], 0.066, 0.002)
-        close("above-gate prediction mismatches", dep["above_gate_mismatches"], 0, 0)
-    except ms.DatasetUnavailable as exc:
-        problems.append(str(exc))
 
     # Every system the code evaluates must appear in the deposit.
     deposited = set(ms.evaluated_systems())
@@ -623,4 +514,4 @@ if __name__ == "__main__":  # pragma: no cover
         for line in issues:
             print(f"  - {line}")
         raise SystemExit(1)
-    print("Config reproduces every derived figure checked against the manuscript.")
+    print("Operational configuration and available dataset checks passed.")

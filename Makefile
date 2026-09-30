@@ -8,7 +8,8 @@
 #   stream plus the runtime services needed by the selected systems.
 
 PY ?= python3
-DEPOSIT ?= data/ADAM_Dataset_Master.xlsx
+DEPOSIT ?= data/ADAM_Dataset_Master_v14_reconciled.xlsx
+PHASE5_MASTER ?= data/ADAM_Dataset_Master_v14_reconciled.xlsx
 DATA ?= data/d1_four_node.csv
 PRIMARY_DATA ?= data/artifacts/d1_primary_channel.csv
 FIXTURE := data/artifacts/d1_simulated.csv
@@ -18,7 +19,7 @@ DEPOSIT_FIGURES ?= figures
 .PHONY: help install test verify verify-manuscript fixture export-primary-data check-data \
         appendix appendix-file offline recompute deposit-figures diagnostics \
         trials substitution degraded-inputs deployment-replay scalability-reference \
-        security-reference reference-rerun contracts clean reproduce
+        security-reference reference-rerun contracts clean reproduce phase5-audit stats publication-figures release-audit
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -63,12 +64,25 @@ deposit-figures:  ## regenerate current data-driven manuscript figures from work
 	$(PY) scripts/figure_swap_study.py $(DEPOSIT) $(DEPOSIT_FIGURES)
 	$(PY) scripts/figure_degraded_conditions.py $(DEPOSIT) $(DEPOSIT_FIGURES)
 	$(PY) scripts/figure5_coordination.py $(DEPOSIT) $(DEPOSIT_FIGURES)
-	$(PY) scripts/figure6_resources.py $(DEPOSIT) $(DEPOSIT_FIGURES)
+	@echo "Resource Figure 8 requires the Phase 5 source audit; legacy figure6 is not a publication figure."
 	$(PY) scripts/figure7_scalability.py $(DEPOSIT) $(DEPOSIT_FIGURES)
-	$(PY) scripts/figure8_security.py $(DEPOSIT) $(DEPOSIT_FIGURES)
+	@echo "Security Figure 10 requires the Phase 5 source audit; legacy figure8 is not a publication figure."
+
+phase5-audit:  ## verify approved V14 security/resource records and generate source-linked figure candidates
+	$(PY) scripts/phase5_verify.py --workbook $(PHASE5_MASTER) --out $(RESULTS)/phase5 --check-manuscript --plot
 
 recompute: test verify-manuscript appendix-file deposit-figures  ## recompute workbook-backed checks/figures (not physical re-execution)
 	@echo "Workbook-backed recomputation complete. This does not re-execute the historical physical deployment or raw four-node fusion."
+
+stats:  ## recompute the 10+5+20 trial-level comparison families from V14
+	$(PY) scripts/export_revised_statistics.py $(DEPOSIT) --out $(RESULTS)/revised_statistical_tests.csv
+
+publication-figures: phase5-audit  ## regenerate source-linked resource/security publication figures
+	$(PY) scripts/figure8_resources_publication.py $(DEPOSIT) $(RESULTS)/publication_figures
+	$(PY) scripts/figure10_security_publication.py $(DEPOSIT) $(RESULTS)/publication_figures
+
+release-audit: test verify-manuscript stats phase5-audit publication-figures  ## local release-candidate evidence gate
+	@echo "Release-candidate evidence gate passed locally. This does not publish GitHub or Zenodo."
 
 # Backward-compatible convenience target. Deliberately maps to recomputation,
 # not to a claim of full experimental reproduction.

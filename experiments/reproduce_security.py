@@ -126,7 +126,9 @@ def model_failure(path: str) -> Dict[str, Any]:
     return {
         "events": int(len(llm)),
         "induced_failures": int(fired.sum()),
-        "recovery_rate": float(fired.sum() / fired.sum()) if fired.sum() else 0.0,
+        "continued_given_fallback": int(cont.loc[fired].sum()),
+        "continued_fraction_given_fallback": float(cont.loc[fired].mean()) if fired.sum() else None,
+        "recovery_rate": float(cont.loc[fired].mean()) if fired.sum() else None,
         "crews_completed": int(cont.sum()),
         "completion_rate": float(cont.mean()),
         "fallback_latency_ms": {
@@ -203,7 +205,8 @@ def main() -> int:
     print(f"  retrieval affected in {poi['retrieval_affected']}/{poi['events']} events")
 
     print(f"\n4.5.2 Model failure  ({fail['events']} events)")
-    print(f"  induced failures {fail['induced_failures']}, all recovered")
+    print(f"  fallback triggered {fail['induced_failures']}; "
+          f"crews continued after fallback {fail['continued_given_fallback']}/{fail['induced_failures']}")
     print(f"  crews completed {fail['crews_completed']}/{fail['events']}")
     l = fail["fallback_latency_ms"]
     print(f"  fallback latency mean {l['mean']:.1f} ms, median {l['median']:.1f}, "

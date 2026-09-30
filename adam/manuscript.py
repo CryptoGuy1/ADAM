@@ -5,7 +5,7 @@ adam.manuscript
 Reference values recomputed from the deposited dataset.
 
 ``verify_against_manuscript()`` compares the constants in :mod:`adam.config`
-against ``ADAM_Dataset_Master.xlsx`` - the workbook a reviewer downloads -
+against ``ADAM_Dataset_Master_v14_reconciled.xlsx`` - the canonical analytical workbook -
 rather than against a second table of literals. Code and data cannot diverge
 without the check failing.
 
@@ -24,7 +24,7 @@ DATASET_ENV = "ADAM_DATASET"
 DEFAULT_DATASET = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "data",
-    "ADAM_Dataset_Master.xlsx",
+    "ADAM_Dataset_Master_v14_reconciled.xlsx",
 )
 
 
@@ -62,7 +62,6 @@ def _sheets() -> Dict[str, Any]:
         "resources": read("07_D2_Resource_Log"),
         "scalability": read("08_Scalability_Log"),
         "labeled": read("02_D1_Labeled_Events"),
-        "tests": read("04_D1_Statistical_Tests", header=1),
         "trigger_log": read("D1_RawTrigger_Log"),
         "trigger_summary": read("D1_RawTrigger_Summary"),
         "event_predictions": read("06A_Event_Predictions", header=3),
@@ -113,7 +112,7 @@ def trace_persistence() -> float:
 
 
 def stage_latencies_ms() -> Dict[str, float]:
-    """Mean per-stage latency over the completed events. Equation (6)."""
+    """Mean per-stage latency over the completed deployment events."""
     coord = _sheets()["coord"]
     ok = _completed(coord)
     return {k: float(_num(coord, col)[ok].mean()) for k, col in STAGE_COLUMNS.items()}
@@ -379,7 +378,7 @@ def _fit_power(x, y, xr, yr) -> Dict[str, float]:
 
 
 def node_scaling_fit(scope: str) -> Dict[str, float]:
-    """Node-count scaling model T(N) = T0 + alpha * N^beta. Table 7.
+    """Archived node-count scaling fit T(N) = T0 + alpha * N^beta.
 
     ``scope`` selects the fitted domain:
 
@@ -412,10 +411,10 @@ def node_scaling_fit(scope: str) -> Dict[str, float]:
 
 
 def simulator_validation() -> Dict[str, float]:
-    """Scale-out model against matched hardware, decision latency, N = 1-4.
+    """ARCHIVED scale-out predictions against matched hardware, N = 1-4.
 
     MAPE and mean bias over the per-level means, as reported in
-    09_Fitted_Models. The scale-out results at N > 4 are conditional on this
+    09_Fitted_Models. The archived scale-out results at N > 4 are conditional on this
     agreement.
     """
     import numpy as np
@@ -484,21 +483,25 @@ def sensor_error_variances() -> Dict[str, float]:
 
 
 def statistical_tests() -> Dict[str, Dict[str, float]]:
-    t = _sheets()["tests"]
+    """Recompute the 10-comparison main benchmark family from trial outcomes.
+
+    The legacy ``04_D1_Statistical_Tests`` sheet contains an earlier eight-row
+    family and is retained only as historical workbook content.  The active
+    manuscript family includes the contextual Random Forest and Gradient
+    Boosting comparators, so it is recomputed from ``03_D1_Trial_Results``.
+    """
+    from analysis.revised_statistics import main_benchmark_family
+
     out: Dict[str, Dict[str, float]] = {}
-    for _, row in t.iterrows():
-        key = str(row.get("Comparison", "")).strip()
-        if not key or key == "nan":
-            continue
-        try:
-            out[key] = {
-                "n": float(row.get("N_Effective", float("nan"))),
-                "p_exact": float(row.get("P_Exact", float("nan"))),
-                "p_holm": float(row.get("P_Holm", float("nan"))),
-            }
-        except (TypeError, ValueError):
-            continue
+    for row in main_benchmark_family(_sheets()["trials"]):
+        out[row.comparison] = {
+            "n": float(row.n_effective),
+            "p_exact": float(row.p_exact),
+            "p_holm": float(row.p_holm),
+            "mean_difference": float(row.mean_difference),
+        }
     return out
+
 
 
 __all__ = [

@@ -11,14 +11,12 @@ Section 3.1.2 separates the two roles at the schema level:
     EventTrace  persistent - resolved events, retrieved as h_past
 
 One store backs both, which avoids running a second service on a
-resource-constrained node. The cost is a measured 55 ms trigger-publication
-latency per write - about 2.6% of the 2,093 ms crew-formation time, so the
-simpler design is retained (Section 3.1.2).
+resource-constrained node. The stored resource and coordination records provide
+the measurements for assessing this design (Section 3.1.2).
 
 Provenance
 ----------
-Section 4.5.1 attributes the small poisoning effect (Delta F1 = -0.016 at 20
-entries) partly to "provenance tagging and schema validation during ingestion."
+Section 4.5.1 discusses provenance tagging and schema validation during ingestion.
 Those are implemented in :meth:`WeaviateMemory.persist_trace` and
 :meth:`_validate_record`, not assumed.
 
@@ -70,25 +68,36 @@ class MemoryStore(Protocol):
 # ---------------------------------------------------------------------------
 
 
-def _provenance_tag(trace: EventTrace) -> str:
-    """Content hash binding a stored record to the event that produced it.
+def record_provenance_tag(rec: Dict[str, Any]) -> str:
+    """Compute the record's reproducible content checksum.
 
-    A poisoned record fabricated outside the pipeline will not carry a tag
-    consistent with its own fields, which is what :func:`_validate_record`
-    checks on retrieval.
+    This detects an inconsistent record; it is not authentication. A writer
+    with direct access to the store can compute a matching checksum.
     """
     payload = json.dumps(
         {
-            "event_id": trace.event_id,
-            "trigger_node": trace.trigger_node,
-            "trigger_ppm": round(trace.trigger_ppm, 3),
-            "fused_ppm": round(trace.fused_ppm or 0.0, 3),
-            "classification": trace.decision.classification if trace.decision else "",
-            "final_action": trace.final_action or "",
+            "event_id": rec["event_id"],
+            "trigger_node": rec["trigger_node"],
+            "trigger_ppm": round(float(rec["trigger_ppm"]), 3),
+            "fused_ppm": round(float(rec["fused_ppm"]), 3),
+            "classification": rec["classification"],
+            "final_action": rec["final_action"],
         },
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def _provenance_tag(trace: EventTrace) -> str:
+    dec = trace.decision
+    return record_provenance_tag({
+        "event_id": trace.event_id,
+        "trigger_node": trace.trigger_node,
+        "trigger_ppm": trace.trigger_ppm,
+        "fused_ppm": trace.fused_ppm or 0.0,
+        "classification": dec.classification if dec else "",
+        "final_action": trace.final_action or "",
+    })
 
 
 def trace_to_record(trace: EventTrace) -> Dict[str, Any]:
@@ -102,10 +111,18 @@ def trace_to_record(trace: EventTrace) -> Dict[str, Any]:
         "trigger_ppm": trace.trigger_ppm,
         "fused_ppm": trace.fused_ppm,
         "classification": dec.classification if dec else "UNKNOWN",
+        # Legacy field remains the original Decision-Agent score. On a class
+        # flip it must not be interpreted as confidence in the final class.
         "confidence": dec.confidence if dec else 0.0,
+        "model_confidence": trace.model_confidence,
+        "crew_support": trace.crew_support,
         "severity": dec.severity if dec else "NONE",
         "reasoning": dec.reasoning if dec else "",
         "final_action": trace.final_action or "",
+        "conflict_resolved": trace.conflict_resolved,
+        "conflict_source_event_id": trace.conflict_source_event_id or "",
+        "local_classification": trace.local_decision.classification if trace.local_decision else "",
+        "local_action": trace.local_decision.recommended_action if trace.local_decision else "",
         "outcome": trace.governance_reason or "",
         "degraded_mode": trace.degraded_mode,
         "governance_valid": bool(trace.governance_valid),
@@ -116,10 +133,13 @@ def trace_to_record(trace: EventTrace) -> Dict[str, Any]:
 
 _REQUIRED_FIELDS = (
     "event_id",
+    "trigger_node",
+    "trigger_ppm",
     "fused_ppm",
     "classification",
     "confidence",
     "severity",
+    "final_action",
     "provenance",
 )
 
@@ -127,9 +147,9 @@ _REQUIRED_FIELDS = (
 def _validate_record(rec: Dict[str, Any]) -> bool:
     """Schema validation applied at ingestion and again on retrieval.
 
-    Rejects records that are missing required fields, carry an out-of-range
-    confidence, or claim a classification outside the permitted set. This is
-    the ingestion check Section 4.5.1 credits for limiting poisoning impact.
+    Rejects records with missing fields, invalid values, or a content checksum
+    inconsistent with the tagged fields. The checksum does not authenticate a
+    direct store writer, who can compute a matching value.
     """
     for f in _REQUIRED_FIELDS:
         if f not in rec:
@@ -148,7 +168,10 @@ def _validate_record(rec: Dict[str, Any]) -> bool:
         return False
     if ppm < 0 or ppm > 1e6:
         return False
-    return True
+    try:
+        return rec["provenance"] == record_provenance_tag(rec)
+    except (TypeError, ValueError, KeyError, OverflowError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -350,9 +373,15 @@ class WeaviateMemory:
                     Property(name="fused_ppm", data_type=DataType.NUMBER),
                     Property(name="classification", data_type=DataType.TEXT),
                     Property(name="confidence", data_type=DataType.NUMBER),
+                    Property(name="model_confidence", data_type=DataType.NUMBER),
+                    Property(name="crew_support", data_type=DataType.NUMBER),
                     Property(name="severity", data_type=DataType.TEXT),
                     Property(name="reasoning", data_type=DataType.TEXT),
                     Property(name="final_action", data_type=DataType.TEXT),
+                    Property(name="conflict_resolved", data_type=DataType.BOOL),
+                    Property(name="conflict_source_event_id", data_type=DataType.TEXT),
+                    Property(name="local_classification", data_type=DataType.TEXT),
+                    Property(name="local_action", data_type=DataType.TEXT),
                     Property(name="outcome", data_type=DataType.TEXT),
                     Property(name="degraded_mode", data_type=DataType.BOOL),
                     Property(name="governance_valid", data_type=DataType.BOOL),
@@ -361,6 +390,20 @@ class WeaviateMemory:
                 ],
             )
             logger.info("created persistent class %s", CLASS_EVENT_TRACE)
+        else:
+            # Existing Phase 7 stores need these properties before a Phase 8
+            # trace can be inserted. Preserve old objects and add only missing
+            # fields; historical records will naturally have null values.
+            coll = self.client.collections.get(CLASS_EVENT_TRACE)
+            known = {p.name for p in coll.config.get().properties}
+            for name in ("model_confidence", "crew_support"):
+                if name not in known:
+                    coll.config.add_property(Property(name=name, data_type=DataType.NUMBER))
+            for name in ("conflict_source_event_id", "local_classification", "local_action"):
+                if name not in known:
+                    coll.config.add_property(Property(name=name, data_type=DataType.TEXT))
+            if "conflict_resolved" not in known:
+                coll.config.add_property(Property(name="conflict_resolved", data_type=DataType.BOOL))
 
     # -- CrewEvent
     def publish_trigger(self, event: CrewEvent) -> bool:
@@ -423,11 +466,20 @@ class WeaviateMemory:
                 "return_properties": [
                     "event_id",
                     "timestamp",
+                    "trigger_node",
+                    "trigger_ppm",
                     "fused_ppm",
                     "date",
                     "classification",
                     "confidence",
+                    "model_confidence",
+                    "crew_support",
                     "severity",
+                    "final_action",
+                    "conflict_resolved",
+                    "conflict_source_event_id",
+                    "local_classification",
+                    "local_action",
                     "outcome",
                     "provenance",
                 ],
@@ -472,4 +524,4 @@ class WeaviateMemory:
             return -1
 
 
-__all__ = ["MemoryStore", "InMemoryStore", "WeaviateMemory", "trace_to_record"]
+__all__ = ["MemoryStore", "InMemoryStore", "WeaviateMemory", "trace_to_record", "record_provenance_tag"]

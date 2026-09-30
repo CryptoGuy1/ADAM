@@ -152,12 +152,12 @@ def main() -> int:
     ap.add_argument("--address", action="append", required=True,
                     help="contract address; repeat for several")
     ap.add_argument("--abi", help="path to DecisionLogger.json (optional but better)")
-    ap.add_argument("--start", default="2025-05-04 09:00:00")
-    ap.add_argument("--end", default="2025-05-07 09:00:00")
-    ap.add_argument("--expect", type=int, default=459,
-                    help="event count the manuscript claims")
-    ap.add_argument("--expect-persisted", type=int, default=446,
-                    help="successfully persisted count the manuscript claims")
+    ap.add_argument("--start", required=True, help="UTC window start")
+    ap.add_argument("--end", required=True, help="UTC window end")
+    ap.add_argument("--expect", type=int,
+                    help="optional expected event count for comparison")
+    ap.add_argument("--expect-persisted", type=int,
+                    help="optional expected completed count for comparison")
     ap.add_argument("--out", default="chain_events.csv")
     args = ap.parse_args()
 
@@ -212,14 +212,17 @@ def main() -> int:
     # ---- summary
     print("\n" + "=" * 62)
     print(f"events on-chain in window : {len(rows)}")
-    print(f"manuscript claims         : {args.expect} coordination events")
-    print(f"           of which persisted: {args.expect_persisted}")
+    if args.expect is not None:
+        print(f"expected event count      : {args.expect}")
+    if args.expect_persisted is not None:
+        print(f"expected completed count  : {args.expect_persisted}")
     print(f"first : {rows[0]['timestamp']}")
     print(f"last  : {rows[-1]['timestamp']}")
-    print(f"rate  : {len(rows)/hours:.2f} events/hour over {hours:.0f} h "
-          f"(manuscript: {args.expect/hours:.2f}/h)")
+    print(f"rate  : {len(rows)/hours:.2f} events/hour over {hours:.0f} h")
 
     for label, target in (("total", args.expect), ("persisted", args.expect_persisted)):
+        if target is None:
+            continue
         delta = len(rows) - target
         verdict = "MATCHES" if abs(delta) <= max(3, 0.02 * target) else "DIFFERS"
         print(f"  vs {label:<10}: {delta:+d}   {verdict}")

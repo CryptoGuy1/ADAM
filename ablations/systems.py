@@ -16,8 +16,7 @@ attribution in Section 4.1 would not follow.
 
 The one deliberate asymmetry is No-Blockchain. Removing governance removes the
 validation gate, so an action executes on quorum alone. Section 4.1 reports
-detection essentially unchanged (0.889 vs 0.896) - as intended, since the
-governance layer supplies accountability rather than accuracy.
+the governance layer supplies accountability rather than a classifier input.
 """
 
 from __future__ import annotations
@@ -154,9 +153,8 @@ def _ablate(base: ADAMConfig, name: str, **flags: bool) -> ADAMConfig:
 def make_no_aggregator(base: Optional[ADAMConfig] = None, **kw: Any) -> ADAMSystem:
     """ADAM-No-Aggregator: cross-node fusion removed, local evidence only.
 
-    Section 4.1: F1 falls to 0.869. The Aggregator is also the primary defense
-    against sensor injection (Section 4.5.1), so this configuration is the one
-    an attacker would most like to face.
+    Removes cross-node aggregation from the crew. Evaluate its classification
+    and injection-defense effects from the run outputs.
     """
     cfg = _ablate(base or DEFAULT_CONFIG, "adam_no_aggregator", enable_aggregator=False)
     sys = ADAMSystem(config=cfg, **kw)
@@ -167,9 +165,7 @@ def make_no_aggregator(base: Optional[ADAMConfig] = None, **kw: Any) -> ADAMSyst
 def make_no_llm(base: Optional[ADAMConfig] = None, **kw: Any) -> ADAMSystem:
     """ADAM-No-LLM: reasoning disabled, deterministic logic after triggering.
 
-    Section 4.1: the largest single drop, to F1 = 0.840 - which is what
-    establishes that crew coordination alone does not account for ADAM's
-    improvement over rule-based monitoring.
+    Classification uses deterministic logic after triggering.
     """
     cfg = _ablate(base or DEFAULT_CONFIG, "adam_no_llm", enable_llm=False)
     kw.setdefault("llm_client", None)
@@ -181,9 +177,7 @@ def make_no_llm(base: Optional[ADAMConfig] = None, **kw: Any) -> ADAMSystem:
 def make_no_blockchain(base: Optional[ADAMConfig] = None, **kw: Any) -> ADAMSystem:
     """ADAM-No-Blockchain: governance validation and ledger logging removed.
 
-    Section 4.1: F1 = 0.889, essentially unchanged. The near-zero accuracy
-    effect is the intended result for an accountability mechanism, not evidence
-    that the layer is unnecessary (Section 5.1).
+    Removes governance validation and ledger logging from this configuration.
     """
     cfg = _ablate(base or DEFAULT_CONFIG, "adam_no_blockchain", enable_blockchain=False)
     sys = ADAMSystem(config=cfg, **kw)

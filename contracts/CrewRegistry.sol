@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * @title CrewRegistry
  * @notice Agent identity and crew lifecycle (manuscript Section 3.1.3).
  *
- * @dev Vote attributability rests here. Table 8's tolerance bounds assume each
+ * @dev Vote attributability rests here. the analytical quorum bounds assume each
  *      ballot maps to one distinct registered agent; an adversary able to
  *      register unlimited identities defeats them regardless of quorum
  *      (Section 4.5.1). MAX_AGENTS_PER_NODE is the prototype's blunt limit on
@@ -61,6 +61,14 @@ contract CrewRegistry is Ownable {
 
     function registerAgent(address agent, address node, string calldata role) external onlyOwner {
         require(agent != address(0), "CrewRegistry: zero agent address");
+        bytes32 roleHash = keccak256(bytes(role));
+        require(
+            roleHash == keccak256(bytes("sensor")) ||
+            roleHash == keccak256(bytes("aggregator")) ||
+            roleHash == keccak256(bytes("decision")) ||
+            roleHash == keccak256(bytes("coordinator")),
+            "CrewRegistry: unrecognized role"
+        );
         require(agents[agent].registeredAt == 0, "CrewRegistry: agent already registered");
         require(nodeAgentCount[node] < MAX_AGENTS_PER_NODE, "CrewRegistry: node agent limit reached");
 
@@ -137,6 +145,16 @@ contract CrewRegistry is Ownable {
             a.reputationScore = old < 20 ? 0 : old - 20;
         }
         emit ReputationUpdated(agent, old, a.reputationScore);
+    }
+
+
+    function isVotingAgent(address agent) external view returns (bool) {
+        Agent storage a = agents[agent];
+        if (!a.active) return false;
+        bytes32 roleHash = keccak256(bytes(a.role));
+        return roleHash == keccak256(bytes("sensor")) ||
+            roleHash == keccak256(bytes("aggregator")) ||
+            roleHash == keccak256(bytes("decision"));
     }
 
     function getCrewMembers(uint256 crewId) external view returns (address[] memory) {

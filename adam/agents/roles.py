@@ -7,7 +7,7 @@ The four role-specialized agents of Section 3.1.2.
     Sensor       monitors local streams, screens, publishes the trigger
     Aggregator   retrieves cross-node evidence, fuses it (Equation 2)
     Decision     prompts the local model, returns d_t (Equation 3)
-    Coordinator  checks quorum (Equation 4), validates policy, executes, verifies trace
+    Coordinator  tallies class quorum, validates policy, executes, verifies trace
 
 Two properties matter for the manuscript's claims and are enforced here rather
 than left to convention:
@@ -16,18 +16,17 @@ than left to convention:
    Section 3.1.2 is explicit on this point. Each crew constructs its own, and
    it holds no state across events.
 
-2. **The Coordinator does not override votes.** Section 3.2 states it "counts
-   approvals, checks the governance validator, and executes the action only
-   when the quorum condition holds." :meth:`CoordinatorAgent.tally` therefore
-   only reads the vote map.
+2. **The Coordinator does not cast or alter ballots.** It tallies independent
+   NORMAL/ANOMALY classifications and validates a class-aligned action only
+   when strict majority is met. :meth:`CoordinatorAgent.tally` reads the vote
+   map but never supplies another vote.
 
 Voting
 ------
-Each agent votes on the proposed action using its own role-specific evidence
-(Section 3.2): the Sensor checks consistency with the local trigger, the
-Aggregator with cross-node context, the Decision agent with its own semantic
-interpretation. Independent evidence is what makes the vote meaningful; if all
-three simply echoed the Decision Agent, Equation (4) would be theater.
+Each agent casts its own NORMAL/ANOMALY classification, not an approval of the
+Decision Agent's action. Sensor uses local observations, Aggregator uses fused
+peer evidence, and Decision uses its proposed class. The Coordinator counts but
+does not vote, and a two-voter split withholds action.
 """
 
 from __future__ import annotations
@@ -60,8 +59,8 @@ class Agent:
     def __repr__(self) -> str:  # pragma: no cover
         return f"<{type(self).__name__} {self.agent_id}@{self.node_id}>"
 
-    def vote(self, decision: DecisionObject, context: Dict[str, Any]) -> bool:
-        """Binary approval vote v_i(a_t). Overridden per role."""
+    def vote(self, decision: DecisionObject, context: Dict[str, Any]) -> str:
+        """Return an independent NORMAL/ANOMALY classification."""
         raise NotImplementedError
 
 
@@ -74,7 +73,7 @@ class SensorAgent(Agent):
     """Monitors the local stream, screens, and publishes crew-formation triggers.
 
     Holds a rolling baseline window, which serves two purposes: it is the
-    ``{m_{t-k:t}}`` temporal context of Equation (3), and it is this agent's
+    ``{m_{t-k:t}}`` temporal context of the Decision-Agent input, and it is this agent's
     independent evidence when voting.
     """
 
@@ -133,35 +132,19 @@ class SensorAgent(Agent):
             return "MODERATE"
         return "LOW"
 
-    def vote(self, decision: DecisionObject, context: Dict[str, Any]) -> bool:
-        """Approve when the decision is consistent with the local trigger.
+    def vote(self, decision: DecisionObject, context: Dict[str, Any]) -> str:
+        """Independent local class: screen crossing or >=2x prior baseline.
 
-        Evidence: did this node's own reading cross threshold, and does the
-        classification agree with that? A NORMAL call on a reading far above
-        baseline is refused; so is an ANOMALY call on a reading that never
-        triggered locally and shows no baseline departure.
+        Only pre-event baseline values are used, never the NDIR reference or
+        the Decision Agent's proposed class. A missing baseline does not
+        automatically imply an infinite departure.
         """
-        local_ppm = float(context.get("trigger_ppm", 0.0))
+        local_ppm = float(context["trigger_ppm"])
         triggered = trigger(local_ppm, self.config.threshold_ppm) == 1
-        event_baseline = context.get("baseline_window")
-        if event_baseline:
-            base = statistics.fmean(event_baseline)
-        else:
-            base = self.baseline_mean
-        departure = (local_ppm / base) if base and base > 0 else float("inf")
-
-        if decision.is_anomaly:
-            return triggered or departure >= 2.0
-        # NORMAL: refuse if the local evidence is strongly against it.
-        if triggered and departure >= 3.0:
-            logger.info(
-                "%s refuses NORMAL: local %.0f ppm is %.1fx baseline",
-                self.agent_id,
-                local_ppm,
-                departure,
-            )
-            return False
-        return True
+        history = context.get("baseline_window")
+        base = statistics.fmean(history) if history else self.baseline_mean
+        departure = local_ppm / base if base > 0 and base == base else 0.0
+        return "ANOMALY" if triggered or departure >= 2.0 else "NORMAL"
 
 
 # ---------------------------------------------------------------------------
@@ -174,15 +157,17 @@ class AggregatorAgent(Agent):
 
     This is the agent the pre-revision codebase lacked: it was named
     "validator" and performed schema checks rather than Equation (2) fusion.
-    Section 4.1 attributes 2.7 F1 points to it (0.896 vs 0.869 without).
+    Its contribution can be assessed through the corresponding ablation.
     """
 
     role = "aggregator"
 
-    #: Weighted z-score past which a node is flagged as disagreeing. This is the
-    #: cross-node corroboration behind the 90.0% attack detection rate
-    #: (27 of 30 injections) in Section 4.5.1.
+    #: Weighted z-score past which a node is flagged as disagreeing.
     OUTLIER_Z: float = 1.5
+    # With three contributing nodes the maximum attainable standardized
+    # deviation is sqrt(2)=1.414. Use a testable 1.25 threshold on the
+    # three-node dropout path rather than raising or disabling corroboration.
+    DROPOUT_OUTLIER_Z: float = 1.25
 
     def __init__(self, agent_id: str, node_id: str, config: ADAMConfig = DEFAULT_CONFIG):
         super().__init__(agent_id, node_id, config)
@@ -194,7 +179,8 @@ class AggregatorAgent(Agent):
         When the aggregator is disabled (ADAM-No-Aggregator), the crew calls
         :meth:`local_only` instead.
         """
-        result = fuse_readings(readings, outlier_z=self.OUTLIER_Z)
+        threshold = self.DROPOUT_OUTLIER_Z if len(readings) == 3 else self.OUTLIER_Z
+        result = fuse_readings(readings, outlier_z=threshold)
         self._last = result
         if result.outliers:
             logger.info(
@@ -216,31 +202,14 @@ class AggregatorAgent(Agent):
             outliers=(),
         )
 
-    def vote(self, decision: DecisionObject, context: Dict[str, Any]) -> bool:
-        """Approve when the decision is consistent with cross-node context.
+    def vote(self, decision: DecisionObject, context: Dict[str, Any]) -> str:
+        """Independent cross-node classification using the fused measurement.
 
-        Evidence: does the fused estimate support the classification, and did
-        the triggering node stand alone? A single node reading high while its
-        peers read background is the signature of the injection attacks in
-        Section 4.5.1, and this agent refuses to endorse an ANOMALY on that
-        basis alone.
+        A single high triggering node cannot force this vote when its peers
+        lower the fused measurement below the screening operating point.
         """
-        fused = float(context.get("fused_ppm", 0.0))
-        trigger_node = context.get("trigger_node", "")
-        fused_triggers = trigger(fused, self.config.threshold_ppm) == 1
-
-        if self._last is not None and trigger_node in self._last.outliers:
-            if decision.is_anomaly and not fused_triggers:
-                logger.info(
-                    "%s refuses ANOMALY: trigger node %s disagrees with peers",
-                    self.agent_id,
-                    trigger_node,
-                )
-                return False
-
-        if decision.is_anomaly:
-            return fused_triggers or fused >= 0.75 * self.config.threshold_ppm
-        return not fused_triggers or fused < 1.5 * self.config.threshold_ppm
+        fused = float(context["fused_ppm"])
+        return "ANOMALY" if trigger(fused, self.config.threshold_ppm) else "NORMAL"
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +273,7 @@ class DecisionAgent(Agent):
         history: Sequence[Dict[str, Any]],
         deadline_s: Optional[float] = None,
     ) -> InferenceResult:
-        """Generate d_t. Equation (3), Algorithm 1 line 12.
+        """Generate the structured decision object for the event.
 
         With ``enable_llm=False`` (ADAM-No-LLM) this reverts to deterministic
         threshold logic without invoking the model at all - the ablation is a
@@ -369,28 +338,9 @@ class DecisionAgent(Agent):
         self._last = result.decision
         return result
 
-    def vote(self, decision: DecisionObject, context: Dict[str, Any]) -> bool:
-        """Approve when the action is consistent with its own interpretation.
-
-        Evidence: the semantic interpretation this agent produced. It abstains
-        from endorsing low-confidence calls, and refuses when the recommended
-        action contradicts the classification it assigned.
-        """
-        if decision.confidence < 0.35:
-            logger.info(
-                "%s refuses: confidence %.2f below floor", self.agent_id, decision.confidence
-            )
-            return False
-        if decision.degraded_mode and decision.is_anomaly:
-            # A fallback anomaly is a threshold comparison, not an
-            # interpretation. Still approvable - availability matters - but the
-            # trace records that no reasoning stood behind it.
-            return True
-        action = decision.recommended_action.lower()
-        contradicts = decision.is_anomaly and any(
-            phrase in action for phrase in ("no action", "ignore", "continue monitoring")
-        )
-        return not contradicts
+    def vote(self, decision: DecisionObject, context: Dict[str, Any]) -> str:
+        """Vote the reasoner's initial class; confidence is checked by policy."""
+        return decision.classification
 
 
 # ---------------------------------------------------------------------------
@@ -435,20 +385,23 @@ class CoordinatorAgent(Agent):
         decision: DecisionObject,
         context: Dict[str, Any],
     ) -> int:
-        """Poll each voting agent and record its ballot. Algorithm 1 line 14.
-
-        Recorded through :meth:`CrewEvent.record_vote`, which rejects duplicate
-        ballots from one agent - the attributability assumption the Table 8
-        bounds rest on.
-        """
+        """Collect independent class votes; a failed ballot is not NORMAL."""
+        event.expected_voter_count = len(voters)
         for agent in voters:
             try:
-                approve = agent.vote(decision, context)
-            except Exception:
-                logger.exception("%s vote raised; recording as refusal", agent.agent_id)
-                approve = False
-            event.record_vote(agent.agent_id, approve)
-        return event.approvals
+                classification = agent.vote(decision, context)
+                event.record_vote(agent.agent_id, classification)
+            except Exception as exc:
+                logger.exception("%s failed to cast a class vote", agent.agent_id)
+                event.record_vote_error(agent.agent_id, type(exc).__name__)
+        return len(event.votes)
+
+    def tally(self, event: CrewEvent, voter_count: int) -> tuple[str, int, int]:
+        """Apply the strict class majority without consulting governance."""
+        event.expected_voter_count = voter_count
+        classification, agreement, required = event.tally(voter_count)
+        event.final_classification = classification
+        return classification, agreement, required
 
     def validate(
         self,
@@ -456,44 +409,28 @@ class CoordinatorAgent(Agent):
         decision: DecisionObject,
         voter_count: int,
     ) -> ValidationOutcome:
-        """Combined quorum and governance check. Algorithm 1 line 15.
-
-        Both conditions must hold: ``V(d_t, S_t) = 1 AND q_t >= gamma_crew``.
-
-        ``voter_count`` is the number of agents that cast a ballot, which
-        excludes this Coordinator. Passing the full crew size would compute a
-        quorum the crew can exceed, overstating its fault tolerance.
-        """
-        from ..config import quorum as quorum_threshold
-
-        required = quorum_threshold(voter_count)
-        achieved = event.approvals
-
+        """Only a quorate, class-aligned decision may reach policy validation."""
+        classification, achieved, required = self.tally(event, voter_count)
+        if classification == "UNRESOLVED":
+            return ValidationOutcome(
+                approved=False, quorum_required=required,
+                quorum_achieved=achieved, governance_valid=False,
+                reason="classification quorum not reached; action withheld",
+            )
+        if decision.classification != classification:
+            return ValidationOutcome(
+                approved=False, quorum_required=required,
+                quorum_achieved=achieved, governance_valid=False,
+                reason="decision class differs from crew majority; action withheld",
+            )
         if self.config.enable_blockchain and self.validator is not None:
             gov_valid, gov_reason = self.validator.validate(decision, event)
         else:
-            # ADAM-No-Blockchain: policy validation and ledger logging removed.
-            # Section 4.1 reports detection essentially unchanged (0.889 vs
-            # 0.896), which is the intended result - the layer supplies
-            # accountability, not accuracy.
             gov_valid, gov_reason = True, "governance disabled (ADAM-No-Blockchain)"
-
-        approved = gov_valid and achieved >= required
-        if not approved:
-            reason = (
-                f"quorum {achieved}/{required} not met"
-                if achieved < required
-                else f"policy rejected: {gov_reason}"
-            )
-        else:
-            reason = gov_reason or "quorum and policy satisfied"
-
         return ValidationOutcome(
-            approved=approved,
-            quorum_required=required,
-            quorum_achieved=achieved,
-            governance_valid=gov_valid,
-            reason=reason,
+            approved=bool(gov_valid), quorum_required=required,
+            quorum_achieved=achieved, governance_valid=bool(gov_valid),
+            reason=gov_reason if gov_valid else f"policy rejected: {gov_reason}",
         )
 
     def vote(self, decision: DecisionObject, context: Dict[str, Any]) -> bool:

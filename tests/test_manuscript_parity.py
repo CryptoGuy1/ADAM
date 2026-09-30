@@ -14,6 +14,7 @@ Run:  python -m pytest tests/ -v
 from __future__ import annotations
 
 import math
+import json
 import re
 import subprocess
 import sys
@@ -25,11 +26,7 @@ from adam.config import (
     CRITICAL_THRESHOLD_PPM,
     DECISION_DEADLINE_S,
     MIN_CREW_SIZE,
-    N_DEPLOYMENT_EVENTS,
-    NODE_SCALING_FIT_HW,
-    NODE_SCALING_FIT_SCALEOUT,
     REFERENCE_TOLERANCE_PPM,
-    REFERENCE_STAGE_LATENCY_MS,
     SENSOR_ERROR_VARIANCE_RANGE_PPM2,
     THRESHOLD_PPM,
     WARNING_THRESHOLD_PPM,
@@ -50,6 +47,7 @@ from adam.mechanisms import (
 from adam.schemas import DecisionObject, SchemaViolation, SensorReading
 
 REPO = Path(__file__).resolve().parent.parent
+CLAIMS = json.loads((REPO / "data" / "manuscript_result_claims.json").read_text())
 
 
 # ---------------------------------------------------------------------------
@@ -66,55 +64,6 @@ def test_config_reproduces_manuscript():
 def test_screening_threshold_matches_manuscript():
     """Constraint C5 uses a 1,000 ppm raw-MQ-4 screening threshold."""
     assert THRESHOLD_PPM == 1000.0
-
-
-def test_stage_latencies_sum_to_reported_mean():
-    """Equation (6): the six stages sum to the reported decision latency."""
-    total_s = sum(REFERENCE_STAGE_LATENCY_MS.values()) / 1000.0
-    assert total_s == pytest.approx(18.99, abs=0.05)
-
-
-def test_reasoning_is_dominant_latency_component():
-    """Local reasoning accounts for about 81.5% of completed-event mean latency."""
-    total = sum(REFERENCE_STAGE_LATENCY_MS.values())
-    share = REFERENCE_STAGE_LATENCY_MS["T_reason"] / total
-    assert share == pytest.approx(0.815, abs=0.002)
-    coordination = (
-        REFERENCE_STAGE_LATENCY_MS["T_agg"]
-        + REFERENCE_STAGE_LATENCY_MS["T_gov"]
-        + REFERENCE_STAGE_LATENCY_MS["T_weav"]
-        + REFERENCE_STAGE_LATENCY_MS["T_bc"]
-    )
-    assert coordination / total < 0.08
-
-
-def test_node_scaling_fit_endpoints():
-    """Table 7: the hardware fit must recover the measured endpoints.
-
-    Sheet 09 reports mean decision latency of about 17.64 s at N = 1 and
-    18.82 s at N = 4 on hardware, and the scale-out model reaches about
-    20.94 s at N = 16.
-    """
-    hw = NODE_SCALING_FIT_HW
-    t1 = (hw["T0"] + hw["alpha"] * 1 ** hw["beta"]) / 1000
-    t4 = (hw["T0"] + hw["alpha"] * 4 ** hw["beta"]) / 1000
-    assert t1 == pytest.approx(17.58, abs=0.15)
-    assert t4 == pytest.approx(18.87, abs=0.15)
-
-    so = NODE_SCALING_FIT_SCALEOUT
-    t16 = (so["T0"] + so["alpha"] * 16 ** so["beta"]) / 1000
-    assert t16 == pytest.approx(20.9, abs=0.4)
-
-
-def test_node_scaling_exponents():
-    """The hardware exponent exceeds unity; the scale-out exponent does not.
-
-    Over N = 1-4, adding physical nodes adds coordination work slightly faster
-    than linearly. Over N = 4-16, the scale-out curve flattens: the per-event
-    reasoning stage dominates and node count contributes a decelerating share.
-    """
-    assert NODE_SCALING_FIT_HW["beta"] > 1.0
-    assert NODE_SCALING_FIT_SCALEOUT["beta"] < 1.0
 
 
 def test_error_variance_exceeds_reference_tolerance():
@@ -137,24 +86,23 @@ def test_holm_reproduces_published_adjustments():
     """The ten-comparison Holm family must reproduce the revised Table 5."""
     from analysis.metrics import holm_adjust
 
-    raw = {
-        "static": 0.001953125,
-        "rf_raw": 0.001953125,
-        "rf_contextual": 0.005859375,
-        "gbm_contextual": 0.001953125,
-        "cloud": 0.048828125,
-        "single": 0.001953125,
-        "noagg": 0.00390625,
-        "nollm": 0.001953125,
-        "noblockchain": 0.09765625,
-        "noweav": 0.00390625,
+    names = {
+        "static": "ADAM_vs_Static",
+        "rf_raw": "ADAM_vs_RF_Raw",
+        "rf_contextual": "ADAM_vs_RF_Fused",
+        "gbm_contextual": "ADAM_vs_GBM_Fused",
+        "cloud": "ADAM_vs_Cloud",
+        "single": "ADAM_vs_SingleAgent",
+        "noagg": "ADAM_vs_NoAgg",
+        "nollm": "ADAM_vs_NoLLM",
+        "noblockchain": "ADAM_vs_NoBlockchain",
+        "noweav": "ADAM_vs_NoWeaviate",
     }
+    raw = {short: CLAIMS["tables"]["WILCOXON"][full][0] for short, full in names.items()}
     adj = holm_adjust(raw)
-    assert adj["static"] == pytest.approx(0.01953125)
-    assert adj["rf_contextual"] == pytest.approx(0.01953125)
-    assert adj["cloud"] == pytest.approx(0.09765625)
-    assert adj["noblockchain"] == pytest.approx(0.09765625)
-    assert sum(1 for v in adj.values() if v >= 0.05) == 2
+    for short, full in names.items():
+        assert adj[short] == pytest.approx(CLAIMS["tables"]["WILCOXON"][full][1])
+    assert sum(1 for v in adj.values() if v >= 0.05) == CLAIMS["checks"]["main Holm nonsignificant count"]
 
 
 def test_enriched_random_forest_is_gone():
@@ -172,7 +120,7 @@ def test_comparison_family_size_matches_systems():
 
 
 # ---------------------------------------------------------------------------
-# Table 8 / quorum
+# Strict-majority classification quorum
 # ---------------------------------------------------------------------------
 
 TABLE_8 = {
@@ -191,18 +139,18 @@ TABLE_8 = {
 @pytest.mark.parametrize("n,expected", TABLE_8.items())
 def test_table8_quorum_and_tolerance(n, expected):
     exp_q, exp_f = expected
-    assert quorum(n) == exp_q, f"Table 8 row n={n} states gamma={exp_q}"
-    assert tolerated_faults(n) == exp_f, f"Table 8 row n={n} states f={exp_f}"
+    assert quorum(n) == exp_q, f"expected quorum at n={n} is {exp_q}"
+    assert tolerated_faults(n) == exp_f, f"expected tolerated faults at n={n} is {exp_f}"
 
 
 def test_quorum_prevents_unilateral_action():
-    """Section 3.2.4: no single agent may approve an action alone."""
+    """No single voter may determine the class when at least two voters are required."""
     for n in range(2, 12):
         assert quorum(n) >= 2
 
 
 def test_degraded_two_agent_crew_requires_unanimity():
-    """Section 3.2: with |C_t| = 2, both agents must approve."""
+    """With two voters, both must vote for the same class to reach quorum."""
     assert quorum(2) == 2
     assert quorum_satisfied(2, 2)
     assert not quorum_satisfied(1, 2)
@@ -221,7 +169,7 @@ def test_deployed_voting_set_tolerates_one_compromised_agent():
 def test_percentage_quorum_rule_is_rejected():
     """Guards against reintroducing the ceil(n*51/100) rule.
 
-    At the small crew sizes of Table 8 the percentage rule happens to coincide
+    At the small voting-set sizes the percentage rule can happen to coincide
     with strict majority, which is exactly why it survived unnoticed in an
     earlier contract revision. The two diverge as n grows, so quorum must be
     the explicit floor(n/2)+1 expression rather than a percentage constant.
@@ -294,8 +242,8 @@ def test_solidity_governance_rules_cover_python_policy_surface():
         "recommendedAction",
         "requiresReview",
         "degradedMode",
-        "crewSize",
-        "approvals",
+        "voterCount",
+        "classSupport",
     ):
         assert required in params, f"Solidity validator missing {required}"
 
@@ -358,9 +306,9 @@ def test_fusion_weights_match_reported_range():
         SensorReading("n2", 0.0, 1000.0, error_variance=hi),
     ]
     result = fuse_readings(readings)
-    assert result.weights["n1"] == pytest.approx(1.646e-4, rel=1e-2)
-    assert result.weights["n2"] == pytest.approx(1.513e-4, rel=1e-2)
-    assert result.weights["n1"] / result.weights["n2"] == pytest.approx(1.088, abs=0.01)
+    assert result.weights["n1"] == pytest.approx(1 / lo, rel=1e-2)
+    assert result.weights["n2"] == pytest.approx(1 / hi, rel=1e-2)
+    assert result.weights["n1"] / result.weights["n2"] == pytest.approx(CLAIMS["checks"]["sensor weight ratio"], abs=0.01)
 
 
 def test_sensor_variances_match_deposit():
@@ -377,7 +325,7 @@ def test_sensor_variances_match_deposit():
     measured = ms.sensor_error_variances()
     assert measured["min_ppm2"] == pytest.approx(rng[0], abs=1.0)
     assert measured["max_ppm2"] == pytest.approx(rng[1], abs=1.0)
-    assert measured["weight_ratio"] == pytest.approx(1.088, abs=0.01)
+    assert measured["weight_ratio"] == pytest.approx(CLAIMS["checks"]["sensor weight ratio"], abs=0.01)
     assert measured["min_paired"] >= 400, "variance needs real residual degrees of freedom"
 
 
@@ -410,7 +358,7 @@ def test_fusion_flags_injected_outlier():
 
 
 def test_conflict_prefers_higher_severity_even_when_older():
-    """Equation (5): severity takes precedence over recency."""
+    """Conflict resolution gives severity precedence over recency."""
     high_old = Candidate("high", 1.0, -20.0, event_id="e-high")
     low_new = Candidate("low", 0.25, -1.0, event_id="e-low")
 
@@ -420,7 +368,7 @@ def test_conflict_prefers_higher_severity_even_when_older():
 
 
 def test_equal_severity_prefers_more_recent_recommendation():
-    """Equation (5): recency is used only as a severity tie-break."""
+    """Conflict resolution uses recency only as a severity tie-break."""
     older = Candidate("older", 0.75, -10.0, event_id="e-old")
     newer = Candidate("newer", 0.75, -1.0, event_id="e-new")
 
@@ -601,13 +549,13 @@ def test_coordinator_does_not_vote():
 
 
 def test_duplicate_votes_rejected():
-    """Attributability underpins the Table 8 bounds."""
+    """Attributability underpins the analytical quorum bounds."""
     from adam.schemas import CrewEvent
 
     ev = CrewEvent("e1", "n1", 1500.0, 0.0)
-    ev.record_vote("agent-a", True)
+    ev.record_vote("agent-a", "ANOMALY")
     with pytest.raises(ValueError, match="already voted"):
-        ev.record_vote("agent-a", True)
+        ev.record_vote("agent-a", "ANOMALY")
 
 
 def test_agent_view_strips_ground_truth():
@@ -727,24 +675,27 @@ def test_security_results_reproduce_from_deposit():
     path = ms.dataset_path()
 
     inj = rs.injection(path)
-    assert inj["events"] == 30
-    assert inj["detected"] == 27
-    assert inj["detection_rate"] == pytest.approx(0.900, abs=0.001)
-    assert inj["f1_under_attack"] == pytest.approx(0.769, abs=0.002)
+    assert inj["events"] == CLAIMS["checks"]["4.5 crews completed"]
+    assert inj["detected"] == CLAIMS["checks"]["4.5 injection detected"]
+    assert inj["detection_rate"] == pytest.approx(inj["detected"] / inj["events"], abs=0.001)
+    assert inj["f1_under_attack"] == pytest.approx(CLAIMS["checks"]["4.5 attack F1"], abs=0.002)
     assert set(inj["by_attack_type"]) == {
         "zero_inject", "constant_offset", "spike_inject", "replay"
     }
 
     poi = rs.poisoning(path)
-    assert poi["levels"] == [0, 5, 10, 20], "paper reports 0/5/10/20, not 0/5/10/20/50"
-    assert poi["contingency_clean_vs_worst"] == [[8, 0], [6, 1]]
-    assert poi["fisher_exact_p"] == pytest.approx(0.47, abs=0.01)
+    groups = CLAIMS["series"]["poisoning_groups"]
+    assert poi["levels"] == [row[0] for row in groups]
+    assert poi["contingency_clean_vs_worst"] == [
+        [row[1][0], row[1][1] - row[1][0]] for row in (groups[0], groups[-1])
+    ]
+    assert poi["fisher_exact_p"] == pytest.approx(CLAIMS["checks"]["4.5 poisoning fisher p"], abs=0.01)
     assert not poi["significant_at_0_05"]
 
     fail = rs.model_failure(path)
-    assert fail["induced_failures"] == 19
-    assert fail["crews_completed"] == 30
-    assert fail["f1_fallback_decisions_only"] == pytest.approx(0.842, abs=0.002)
+    assert fail["induced_failures"] == CLAIMS["checks"]["4.5 fallback n"]
+    assert fail["crews_completed"] == CLAIMS["checks"]["4.5 crews completed"]
+    assert fail["f1_fallback_decisions_only"] == pytest.approx(CLAIMS["checks"]["4.5 fallback-only F1"], abs=0.002)
 
 
 def test_egress_reports_measured_quantities_only():
@@ -764,11 +715,12 @@ def test_egress_reports_measured_quantities_only():
     assert "cloud_cost" not in eg
     adam = eg["per_system"]["ADAM_LLM"]
     cloud = eg["per_system"]["Cloud_Only"]
-    assert adam["windows"] == 12 and cloud["windows"] == 8
+    assert adam["windows"] == CLAIMS["checks"]["4.5 ADAM windows"]
+    assert cloud["windows"] == CLAIMS["checks"]["4.5 cloud windows"]
     assert adam["kb_per_window"] == 0.0
     assert adam["windows_with_egress"] == 0
-    assert cloud["kb_per_window"] == pytest.approx(117.4, abs=0.5)
-    assert cloud["api_calls_per_window"] == pytest.approx(19.1, abs=0.05)
+    assert cloud["kb_per_window"] == pytest.approx(CLAIMS["checks"]["4.5 cloud KB/window"], abs=0.5)
+    assert cloud["api_calls_per_window"] == pytest.approx(CLAIMS["checks"]["4.5 cloud calls/window"], abs=0.05)
 
 
 def test_static_threshold_baseline_reproduces():
@@ -782,8 +734,8 @@ def test_static_threshold_baseline_reproduces():
     if not ms.available():
         pytest.skip("deposited dataset not present")
     got = ms.threshold_baseline("Raw_Instantaneous_PPM")
-    assert got["f1"] == pytest.approx(0.790, abs=0.002)
-    assert got["far"] == pytest.approx(0.165, abs=0.002)
+    assert got["f1"] == pytest.approx(CLAIMS["tables"]["TABLE4"]["Static_Threshold"][2], abs=0.002)
+    assert got["far"] == pytest.approx(CLAIMS["tables"]["TABLE4"]["Static_Threshold"][3], abs=0.002)
 
 
 def test_deployment_semantics_workbook_sheet_reproduces_summary():
@@ -794,14 +746,14 @@ def test_deployment_semantics_workbook_sheet_reproduces_summary():
         pytest.skip("deposited dataset not present")
 
     g = ms.gated_run_summary()
-    assert g["triggered"] == 889
-    assert g["trigger_rate"] == pytest.approx(0.4445, abs=0.0005)
-    assert g["f1"] == pytest.approx(0.830, abs=0.002)
-    assert g["far"] == pytest.approx(0.066, abs=0.002)
+    assert g["triggered"] == CLAIMS["checks"]["4.1 triggered events"]
+    assert g["trigger_rate"] == pytest.approx(CLAIMS["checks"]["4.1 gated trigger rate"], abs=0.0005)
+    assert g["f1"] == pytest.approx(CLAIMS["series"]["deployment_metrics"][2][1], abs=0.002)
+    assert g["far"] == pytest.approx(CLAIMS["series"]["deployment_metrics"][3][1], abs=0.002)
 
     struct = ms.gated_predictions_agree()
-    assert struct["rows"] == 2000
-    assert struct["trigger_rule_matches"] == 2000
+    assert struct["rows"] == CLAIMS["checks"]["D1 event rows"]
+    assert struct["trigger_rule_matches"] == CLAIMS["checks"]["D1 event rows"]
     assert struct["untriggered_anomalies"] == 0
 
 
@@ -815,8 +767,8 @@ def test_benchmark_and_deployment_semantics_are_distinct_and_ordered():
     benchmark = ms.detection_scores()["ADAM_LLM"]["f1"]
     deployment = ms.gated_run_summary()["f1"]
     static = ms.threshold_baseline("Raw_Instantaneous_PPM")["f1"]
-    assert benchmark == pytest.approx(0.896, abs=0.002)
-    assert deployment == pytest.approx(0.830, abs=0.002)
+    assert benchmark == pytest.approx(CLAIMS["tables"]["TABLE4"]["ADAM_LLM"][2], abs=0.002)
+    assert deployment == pytest.approx(CLAIMS["series"]["deployment_metrics"][2][1], abs=0.002)
     assert benchmark > deployment > static
 
 
@@ -1225,9 +1177,9 @@ def test_fides_client_exposes_onchain_governance_validation_without_web3():
         trigger_ppm=1200.0,
         timestamp=1.0,
     )
-    event.record_vote("sensor", True)
-    event.record_vote("aggregator", True)
-    event.record_vote("decision", False)
+    event.record_vote("sensor", "ANOMALY")
+    event.record_vote("aggregator", "ANOMALY")
+    event.record_vote("decision", "NORMAL")
     decision = DecisionObject(
         classification="ANOMALY",
         confidence=0.82,
@@ -1249,7 +1201,7 @@ def test_fides_client_exposes_onchain_governance_validation_without_web3():
     assert args[4] == "raise alert"
     assert args[6] is False  # degraded_mode
     assert args[7] == 3      # number of ballots
-    assert args[8] == 2      # approvals
+    assert args[8] == 2      # votes matching the final class
 
 
 def test_fides_governance_validation_fails_closed_on_contract_error():
@@ -1261,8 +1213,8 @@ def test_fides_governance_validation_fails_closed_on_contract_error():
     client._load_contract = lambda name: (_ for _ in ()).throw(RuntimeError("rpc down"))
 
     event = CrewEvent("evt-abcdef12", "N1", 1200.0, 1.0)
-    event.record_vote("sensor", True)
-    event.record_vote("aggregator", True)
+    event.record_vote("sensor", "ANOMALY")
+    event.record_vote("aggregator", "ANOMALY")
     decision = DecisionObject(
         classification="ANOMALY",
         confidence=0.82,

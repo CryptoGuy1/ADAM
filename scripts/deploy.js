@@ -14,7 +14,7 @@ const hre = require("hardhat");
 const fs = require("fs");
 const path = require("path");
 
-// Table 8 of the manuscript.
+// strict-majority classification quorum.
 const TABLE_8_QUORUM = { 2: 2, 3: 2, 4: 3, 5: 3, 6: 4, 7: 4 };
 const TABLE_8_FAULTS = { 2: 0, 3: 1, 4: 1, 5: 2, 6: 2, 7: 3 };
 
@@ -77,11 +77,11 @@ async function main() {
     const okQ = got === expected;
     const okF = faults === TABLE_8_FAULTS[n];
     console.log(
-      `  n=${n}  quorum ${got} (Table 8: ${expected}) ${okQ ? "ok" : "MISMATCH"}` +
+      `  n=${n}  quorum ${got} (expected: ${expected}) ${okQ ? "ok" : "MISMATCH"}` +
         `   f=${faults} (${TABLE_8_FAULTS[n]}) ${okF ? "ok" : "MISMATCH"}`
     );
     if (!okQ || !okF) {
-      throw new Error(`Contract disagrees with Table 8 at crew size ${n}`);
+      throw new Error(`Contract disagrees with strict-majority quorum at voter count ${n}`);
     }
   }
 

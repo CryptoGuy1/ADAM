@@ -25,6 +25,8 @@ persistence, and trace construction use the normal runtime.
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
 import json
 import os
 import statistics
@@ -169,6 +171,7 @@ def in_crew_fitted_predictions(
     name: str,
     *,
     fold_local_calibration: bool = False,
+    trace_records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Prediction]:
     """LOTO fitted Decision Agent executed through the normal ADAM crew path."""
     backend_name = {
@@ -236,12 +239,58 @@ def in_crew_fitted_predictions(
                     f"trial={event.trial_id}, event={event.event_index}"
                 )
 
+            if trace.final_classification not in ("NORMAL", "ANOMALY"):
+                raise RuntimeError(
+                    f"{backend.name}: classification unresolved; "
+                    f"trial={event.trial_id}, event={event.event_index}; "
+                    "record as incomplete rather than treating as NORMAL"
+                )
+
+            # A failed or unresolved crew is not a NORMAL classification.
+            # Preserve those traces separately; never silently include them in F1.
+            if trace.final_classification not in ("ANOMALY", "NORMAL"):
+                raise RuntimeError(
+                    f"{backend_name}: unscorable final crew class "
+                    f"{trace.final_classification!r} in trial {event.trial_id} "
+                    f"event {event.event_index}; examine event trace"
+                )
+            if trace_records is not None:
+                trace_records.append({
+                    "reasoner": backend_name,
+                    "trial_id": event.trial_id,
+                    "event_index": event.event_index,
+                    "event_id": f"derived-trial-{event.trial_id}-event-{event.event_index}",
+                    "reference_label": event.label,
+                    "initial_classification": trace.initial_classification,
+                    "initial_confidence": (
+                        trace.initial_decision.confidence if trace.initial_decision else None
+                    ),
+                    "sensor_vote": next((v for k, v in trace.classification_votes.items() if k.endswith("-sensor")), None),
+                    "aggregator_vote": next((v for k, v in trace.classification_votes.items() if k.endswith("-aggregator")), None),
+                    "decision_vote": next((v for k, v in trace.classification_votes.items() if k.endswith("-decision")), None),
+                    "vote_errors": json.dumps(trace.vote_errors, sort_keys=True),
+                    "voter_count": trace.voter_count,
+                    "quorum_required": trace.quorum_required,
+                    "quorum_achieved": trace.quorum_achieved,
+                    "final_classification": trace.final_classification,
+                    "class_flipped": trace.initial_classification != trace.final_classification,
+                    "model_confidence": trace.model_confidence,
+                    "crew_support": trace.crew_support,
+                    "confidence_source": trace.confidence_source,
+                    "severity": decision.severity,
+                    "recommended_action": decision.recommended_action,
+                    "governance_valid": trace.governance_valid,
+                    "persisted_chain": trace.persisted_chain,
+                    "persisted_weaviate": trace.persisted_weaviate,
+                    "action_released": trace.executed,
+                    "failure_stage": trace.failure_stage or "",
+                })
             out.append(
                 Prediction(
                     system=backend_name,
                     trial_id=event.trial_id,
                     event_index=event.event_index,
-                    predicted=1 if decision.is_anomaly else 0,
+                    predicted=1 if trace.final_classification == "ANOMALY" else 0,
                     confidence=float(decision.confidence),
                     latency_ms=float(trace.latencies.total_ms),
                     degraded_mode=bool(trace.degraded_mode),
@@ -380,6 +429,8 @@ def main() -> int:
 
     dataset = load_trials(args.data, threshold_ppm=THRESHOLD_PPM)
     dataset.require_multinode("Decision-Agent substitution study", minimum=4)
+    from experiments.export_contextual_features import export_features, sha256_file
+    feature_manifest = export_features(dataset, outdir / "d1_contextual_features.csv", Path(args.data))
 
     pairs: Dict[str, Tuple[List[Prediction], List[Prediction]]] = {}
 
@@ -402,13 +453,53 @@ def main() -> int:
         )
 
         print(f"evaluating {key}: in crew")
+        detailed_traces: List[Dict[str, Any]] = []
         in_crew = in_crew_fitted_predictions(
-            dataset, key, fold_local_calibration=args.fold_local_calibration
+            dataset, key, fold_local_calibration=args.fold_local_calibration,
+            trace_records=detailed_traces,
         )
+        trace_path = outdir / f"{key}_crew_event_traces.csv"
+        with trace_path.open("w", newline="", encoding="utf-8") as out_file:
+            writer = csv.DictWriter(out_file, fieldnames=list(detailed_traces[0]))
+            writer.writeheader()
+            writer.writerows(detailed_traces)
 
         pairs[key] = (standalone, in_crew)
         write_jsonl(outdir / f"predictions_{key}_standalone.jsonl", standalone)
         write_jsonl(outdir / f"predictions_{key}_in_crew.jsonl", in_crew)
+
+    # Preserve a row-level paired audit independently of aggregate F1. The
+    # historic Static and Gemma pairs may have frozen predictions but no
+    # surviving original individual ballots: never manufacture vote traces.
+    event_lookup = {(e.trial_id, e.event_index): e for e in dataset.events}
+    for key, (standalone, in_crew) in pairs.items():
+        left = {(p.trial_id, p.event_index): p for p in standalone}
+        right = {(p.trial_id, p.event_index): p for p in in_crew}
+        if set(left) != set(right) or set(left) != set(event_lookup):
+            raise ValueError(f"{key}: standalone/in-crew/event ID sets do not agree")
+        with (outdir / f"{key}_paired_events.csv").open("w", newline="", encoding="utf-8") as paired_file:
+            writer = csv.DictWriter(paired_file, fieldnames=[
+                "trial_id", "event_index", "event_id", "reference_label",
+                "standalone_classification", "in_crew_classification", "changed",
+                "standalone_confidence", "in_crew_confidence", "vote_trace_available",
+                "source",
+            ])
+            writer.writeheader()
+            for trial_id, event_index in sorted(event_lookup):
+                k = (trial_id, event_index)
+                a, b = left[k], right[k]
+                writer.writerow({
+                    "trial_id": trial_id, "event_index": event_index,
+                    "event_id": f"derived-trial-{trial_id}-event-{event_index}",
+                    "reference_label": event_lookup[k].label,
+                    "standalone_classification": a.predicted,
+                    "in_crew_classification": b.predicted,
+                    "changed": a.predicted != b.predicted,
+                    "standalone_confidence": a.confidence,
+                    "in_crew_confidence": b.confidence,
+                    "vote_trace_available": key in ("logreg", "rf", "gbm"),
+                    "source": "new reference rerun" if key in ("logreg", "rf", "gbm") else "frozen main-benchmark predictions; ballots unavailable",
+                })
 
     rows: List[Dict[str, Any]] = []
     raw_p: Dict[str, float] = {}
@@ -439,6 +530,13 @@ def main() -> int:
 
     payload = {
         "study": "Decision-Agent Substitution Study",
+        "provenance": "fresh reference rerun, not historical recovery",
+        "dataset_source": dataset.source,
+        "dataset_sha256": sha256_file(Path(args.data)),
+        "contextual_feature_export": feature_manifest,
+        "fitted_vote_trace_files": [f"{name}_crew_event_traces.csv" for name in ("logreg", "rf", "gbm")],
+        "paired_event_files": [f"{name}_paired_events.csv" for name in pairs],
+        "historic_static_llm_ballots_available": False,
         "seed": SEED,
         "threshold_ppm": THRESHOLD_PPM,
         "baseline_window": BASELINE_WINDOW,

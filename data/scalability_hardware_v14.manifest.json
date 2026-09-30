@@ -1,0 +1,16 @@
+{
+  "source": "ADAM_Dataset_Master_v14_reconciled.xlsx",
+  "source_sheet": "08_Scalability_Log",
+  "source_sha256": "aa21f5c0272d6fcee27ef27b0a46d2af0fee09f82f1b36bd402b4084fc73629d",
+  "hardware_csv_sha256": "d71beacd3a35b8e1504d877ef3fa9c92f35f4fe3184f1b7e65ea7c47288cbdf5",
+  "rows": 72,
+  "levels": {
+    "1": 18,
+    "2": 18,
+    "3": 18,
+    "4": 18
+  },
+  "historical_hardware_data": true,
+  "generated_data": false,
+  "extraction": "Raw OOXML cached cell values of Run_Mode=HARDWARE rows; original workbook not modified"
+}

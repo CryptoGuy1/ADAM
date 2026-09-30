@@ -5,7 +5,7 @@ experiments.run_security
 The four adversarial scenarios of Section 4.5.
 
     1. sensor injection      falsified readings from a compromised node
-    2. agent compromise      Byzantine voting against the Table 8 bounds
+    2. agent compromise      analytical voting-quorum stress scenario
     3. memory poisoning      fabricated records in semantic memory
     4. model unavailability  Ollama terminated mid-monitoring
 
@@ -72,7 +72,6 @@ class ScenarioResult:
     name: str
     section: str
     metrics: Dict[str, Any] = field(default_factory=dict)
-    reference: Dict[str, Any] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -97,8 +96,7 @@ def scenario_sensor_injection(
 
     Detection is by cross-node corroboration: the Aggregator's weighted
     dispersion check flags a node whose reading departs from the fused estimate
-    by more than ``outlier_z`` weighted standard deviations. Section 4.5.1
-    reports 27 of 30 injections detected.
+    by more than ``outlier_z`` weighted standard deviations.
 
     The undetected fraction matters and is reported explicitly: an injection
     that lands close enough to the true distribution is not distinguishable
@@ -175,20 +173,19 @@ def scenario_sensor_injection(
             "median_fused_shift_ppm": statistics.median(fused_shift),
             "collateral_flags": flagged_wrong_node,
         },
-        reference={"detection_rate": 0.900, "note": "27 of 30 in the deposited records"},
         notes=[
             f"{(1-rate):.1%} of injections went undetected. Cross-node "
             "corroboration bounds a single-node attack; it does not eliminate it.",
             "Detection depends on peers reporting honestly. Colluding nodes "
             "weaken the corroboration signal, and colluding voters bound the "
-            "quorum rule itself: Table 8 states the subversion threshold per "
+            "quorum rule itself: the analytical strict-majority bound gives the subversion threshold per "
             "crew size.",
         ],
     )
 
 
 # ---------------------------------------------------------------------------
-# 2. Agent compromise  (Section 4.5.1, Table 8)
+# 2. Agent compromise (analytical reference scenario)
 # ---------------------------------------------------------------------------
 
 
@@ -196,7 +193,7 @@ def scenario_agent_compromise(crew_sizes: Sequence[int] = (2, 3, 4, 5, 6, 7)) ->
     """Byzantine agents voting to approve an unjustified action.
 
     Rather than sampling, this enumerates every (n, f) pair and checks the
-    quorum arithmetic directly, which is what Table 8 asserts. A compromised
+    quorum arithmetic directly. A compromised
     subset either can or cannot reach gamma_crew; there is nothing stochastic
     about it.
     """
@@ -226,12 +223,8 @@ def scenario_agent_compromise(crew_sizes: Sequence[int] = (2, 3, 4, 5, 6, 7)) ->
 
     return ScenarioResult(
         name="agent_compromise",
-        section="4.5.1 / Table 8",
+        section="analytical quorum stress scenario",
         metrics={"table8": rows, "invariant_violations": violations},
-        reference={
-            "quorum": {2: 2, 3: 2, 4: 3, 5: 3, 6: 4, 7: 4},
-            "tolerated_faults": {2: 0, 3: 1, 4: 1, 5: 2, 6: 2, 7: 3},
-        },
         notes=[
             "Bounds assume votes are attributable to distinct registered agents. "
             "An adversary able to register unlimited identities defeats them "
@@ -260,9 +253,8 @@ def scenario_memory_poisoning(
     ingestion validation - modelling an adversary with direct write access
     rather than one going through the agent API.
 
-    Section 4.5.1 reports Delta F1 = -0.016 at 20 poisoned entries, attributing
-    the small effect to Equation (3) weighting retrieved context against live
-    cross-node evidence rather than treating it as authoritative.
+    The scenario measures the effect of poisoned retrieval records using the
+    event outcomes produced by this run.
     """
     rng = random.Random(seed)
     trial_ids = dataset.trial_ids
@@ -285,27 +277,41 @@ def scenario_memory_poisoning(
         system.fit(train)
 
         # Poisoned records assert that high concentrations were benign.
+        from adam.memory.store import record_provenance_tag
+
+        poison_timestamp = min(event.timestamp for event in test) - 1.0
         for i in range(n_poison):
-            memory.inject_raw(
-                {
-                    "event_id": f"poison-{i}",
-                    "timestamp": time.time(),
-                    "date": "2026-01-01",
-                    "trigger_node": "node_00",
-                    "trigger_ppm": rng.uniform(1500, 4000),
-                    "fused_ppm": rng.uniform(1500, 4000),
-                    "classification": "NORMAL",
-                    "confidence": 0.97,
-                    "severity": "NONE",
-                    "reasoning": "routine ambient variation, no action needed",
-                    "final_action": "continue monitoring",
-                    "outcome": "no release found",
-                    "degraded_mode": False,
-                    "governance_valid": True,
-                    "provenance": "0" * 32,
-                    "ingested_at": time.time(),
-                }
-            )
+            fabricated = {
+                "event_id": f"poison-{i}",
+                "timestamp": poison_timestamp,
+                "date": time.strftime("%Y-%m-%d", time.gmtime(poison_timestamp)),
+                "trigger_node": "node_00",
+                "trigger_ppm": rng.uniform(1500, 4000),
+                "fused_ppm": rng.uniform(1500, 4000),
+                "classification": "NORMAL",
+                "confidence": 0.97,
+                "severity": "NONE",
+                "reasoning": "routine ambient variation, no action needed",
+                "final_action": "continue monitoring",
+                "outcome": "no release found",
+                "degraded_mode": False,
+                "governance_valid": True,
+                "ingested_at": time.time(),
+            }
+            # Direct store writers can compute a consistent checksum. The
+            # poisoning test must not rely on a malformed tag being accepted.
+            fabricated["provenance"] = record_provenance_tag(fabricated)
+            memory.inject_raw(fabricated)
+
+        if n_poison:
+            assert any(
+                rec["event_id"].startswith("poison-")
+                for rec in memory.retrieve(
+                    fused_ppm=2000.0,
+                    k=max(n_poison, config.semantic_memory_k),
+                    cutoff_timestamp=min(event.timestamp for event in test),
+                )
+            ), "poisoned records must be visible to the replay retrieval"
 
         preds = system.predict_all(test)
         scores = score_system("adam_llm", test, preds)
@@ -365,7 +371,6 @@ def scenario_memory_poisoning(
             "significant_at_0_05": bool(fisher_p < 0.05),
             "meaningful": config.enable_llm,
         },
-        reference={"fisher_exact_p": 0.47},
         notes=notes,
     )
 
@@ -425,10 +430,8 @@ def scenario_model_unavailability(
 ) -> ScenarioResult:
     """Ollama terminated mid-monitoring; the pipeline must stay available.
 
-    The reported availability test contains 30 monitored events: 19 induced
-    local-model failures and 11 concurrent controls. Deterministic fallback
-    activates for all 19 induced failures; 16/19 fallback-arm classifications
-    are correct (F1=0.842), and all 30 monitored crews complete.
+    Fallback behavior and classification quality are calculated from this
+    run's event records, with failure and control groups reported separately.
 
     The degraded-mode flag keeps fallback decisions distinguishable from normal
     model-backed decisions in the audit record.
@@ -496,13 +499,6 @@ def scenario_model_unavailability(
             ),
             "inference_attempts": dead.calls,
         },
-        reference={
-            "f1_healthy": 0.896,
-            "f1_fallback_only": 0.842,  # 16/19 correct in the induced-failure arm
-            "completion_rate": 1.000,   # 30 of 30 crews completed
-            "recovery_rate": 1.000,     # 19 of 19 induced failures recovered
-            "mean_fallback_latency_ms": 55.7,
-        },
         notes=notes,
     )
 
@@ -550,11 +546,6 @@ def scenario_confidentiality(
             "destinations": summary["destinations"],
             "zero_egress": clean,
         },
-        reference={
-            "zero_egress": True,
-            "cloud_only_kb_per_30min_window": 117.4,
-            "cloud_only_api_calls_per_window": 19.1,
-        },
         notes=[
             "Accounted at the call site, not by packet capture: only the "
             "Cloud-Only comparator increments the ledger.",
@@ -571,7 +562,7 @@ def scenario_confidentiality(
 
 SCENARIOS: Dict[str, str] = {
     "injection": "sensor injection (4.5.1)",
-    "compromise": "agent compromise (4.5.1, Table 8)",
+    "compromise": "agent compromise (analytical quorum stress scenario)",
     "poisoning": "memory poisoning (4.5.1)",
     "unavailability": "model unavailability (4.5.2)",
     "confidentiality": "zero external egress (4.5.3)",
@@ -591,8 +582,6 @@ def _fmt(result: ScenarioResult) -> str:
             lines.append(f"  {k}: {v:.4f}")
         else:
             lines.append(f"  {k}: {v}")
-    if result.reference:
-        lines.append(f"  manuscript reference: {result.reference}")
     for n in result.notes:
         lines.append(f"  note: {n}")
     return "\n".join(lines)

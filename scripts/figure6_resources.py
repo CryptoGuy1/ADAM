@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Figure 6 and Table 7 for Section 4.3, computed from the deposited workbook.
+"""LEGACY resource-figure generator retained for provenance only.
+
+Do not use this script for the current manuscript's Figure 8. Use
+``scripts/figure8_resources_publication.py`` instead. Historical file numbering
+and component-stack presentation are retained only so earlier repository states
+can be interpreted.
+
 
 Panel (a): per-window peak CPU over the deployment, colored by operational
 state, against the C2 budget (80%) and the sustained utilization outside
@@ -9,7 +15,7 @@ Panel (b): per-node memory by state as the stacked reconciliation of
 16_Memory_Budget, annotated with the measured state means from
 07_D2_Resource_Log.
 
-Table 7: per-system CPU, memory, and bandwidth from 03_D1_Trial_Results.
+Per-system CPU, memory, and bandwidth are read from 03_D1_Trial_Results.
 Output at 600 dpi PNG plus vector PDF.
 """
 
@@ -51,7 +57,7 @@ RED = "#D55E00"
 INK = "#1a1a1a"
 GRAY = "#8a8a8a"
 
-WB = sys.argv[1] if len(sys.argv) > 1 else "data/ADAM_Dataset_Master.xlsx"
+WB = sys.argv[1] if len(sys.argv) > 1 else "data/ADAM_Dataset_Master_v14_reconciled.xlsx"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "figures"
 os.makedirs(OUT, exist_ok=True)
 
@@ -137,7 +143,7 @@ fig.savefig(os.path.join(OUT, "figure6_resources.pdf"))
 fig.savefig(os.path.join(OUT, "figure6_resources.png"))
 plt.close(fig)
 
-# ---------------------------------------------------------------- Table 7
+# ---------------------------------------------------------------- Legacy resource table
 tr = pd.read_excel(WB, sheet_name="03_D1_Trial_Results")
 ROWS = [
     ("ADAM_LLM", "ADAM_LLM"),
