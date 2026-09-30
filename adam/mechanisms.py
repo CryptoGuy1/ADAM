@@ -4,11 +4,11 @@ adam.mechanisms
 
 The manuscript's equations as pure functions, free of I/O and agent state.
 
-    Equation (1)  trigger detection            -> :func:`trigger`
-    Equation (2)  inverse-variance fusion      -> :func:`fuse_readings`
-    Equation (4)  crew-agreement validation    -> :func:`quorum_satisfied`
-    Equation (5)  conflict resolution          -> :func:`resolve_conflict`
-    Equation (6)  end-to-end decision latency  -> ``StageLatencies.total_ms``
+    trigger detection             -> :func:`trigger`
+    inverse-variance fusion       -> :func:`fuse_readings`
+    crew classification quorum   -> :func:`quorum_satisfied`
+    conflict resolution           -> :func:`resolve_conflict`
+    end-to-end decision latency   -> ``StageLatencies.total_ms``
 
 Keeping these mechanisms separable allows each manuscript equation to be
 tested independently of agent and service I/O.
@@ -109,8 +109,7 @@ def fuse_readings(
     outlier_z
         When set, nodes whose reading deviates from the weighted mean by more
         than this many weighted standard deviations are reported in
-        ``outliers``. This is the cross-node corroboration signal behind the
-        90.0% attack detection rate in Section 4.5.1. Flagging does not remove
+        ``outliers``. Flagging does not remove
         the reading from the estimate - the Aggregator reports, the Coordinator
         and Decision agents act.
 
@@ -177,27 +176,27 @@ def fuse_readings(
 
 
 # ---------------------------------------------------------------------------
-# Equation (4): crew-agreement validation
+# Crew classification quorum
 # ---------------------------------------------------------------------------
 
 
-def quorum_satisfied(approvals: int, crew_size: int) -> bool:
-    """True when sum_i v_i(a_t) >= gamma_crew. Equation (4).
+def quorum_satisfied(class_support: int, voter_count: int) -> bool:
+    """True when one explicit event class has strict-majority support.
 
-    Delegates the threshold to :func:`adam.config.quorum` so that the runtime,
-    the Table 8 generator, and the Solidity parity test share one definition.
+    Delegates the threshold to :func:`adam.config.quorum` so the runtime and
+    Solidity reference contracts share one definition.
     """
-    return approvals >= quorum(crew_size)
+    return class_support >= quorum(voter_count)
 
 
 # ---------------------------------------------------------------------------
-# Equation (5): deterministic conflict resolution
+# Deterministic conflict resolution
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class Candidate:
-    """One competing recommendation entering Equation (5)."""
+    """One competing recommendation entering conflict resolution."""
 
     action: str
     severity: float  # numeric value mapped from the ordered severity scale

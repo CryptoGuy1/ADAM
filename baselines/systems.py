@@ -79,11 +79,7 @@ class BaselineSystem:
 class StaticThreshold(BaselineSystem):
     """The fixed screening rule applied directly to MQ-4 readings.
 
-    Section 4.1 reports F1 = 0.790 at FAR = 0.165, the mean of the per-trial
-    rates; pooled over all 2,000 events the rate is 182/1,100 = 0.166. The high
-    false-alarm rate
-    reflecting sensitivity to drift and changing background conditions. This is
-    the failure mode the rest of the system exists to address.
+    Its classification metrics are calculated from the supplied trial records.
     """
 
     name = "static_threshold"
@@ -599,8 +595,7 @@ class SingleAgent(BaselineSystem):
 
     One monolithic agent screens, reasons, and decides. No cross-node
     aggregation, no role-specific checks, no semantic memory, no agreement
-    validation. Section 4.1 reports F1 = 0.855, and the gap to full ADAM is the
-    evidence that the crew workflow adds value beyond a single local LLM call.
+    validation. Its output is scored against the same labeled trials.
     """
 
     name = "single_agent"

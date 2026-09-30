@@ -10,10 +10,9 @@ Two separable concerns, deliberately kept apart:
     GovernanceValidator  evaluates V(d_t, S_t) - the policy check
     ChainClient          commits the validated decision to the PoA ledger
 
-Section 3.1.3 draws the same line: "at the application layer, participating
-agents vote on the proposed action ... at the ledger layer, validated decisions
-are committed through the PoA blockchain, which provides immutable logging and
-trace integrity rather than deciding the action itself."
+At the application layer, the Sensor, Aggregator and Decision roles vote on
+event classification; governance checks the associated action. The blockchain
+commits the outcome but does not determine the class.
 
 And the limit, stated plainly in Section 3.1.3: "The ledger secures records
 once written: it establishes what was decided and on what evidence, not whether
@@ -119,7 +118,9 @@ class LocalValidator:
         if decision.severity not in SEVERITY_LEVELS:
             return False, f"unrecognized severity {decision.severity!r}"
 
-        # R2: confidence floor for autonomous action.
+        # R2: initial Decision-Agent score floor. On a crew class flip this
+        # score is not confidence in the final classification; support is
+        # separately recorded in the event ballots and EventTrace.
         if decision.confidence < p.min_confidence:
             return False, (
                 f"confidence {decision.confidence:.2f} below policy floor "
@@ -162,7 +163,7 @@ class LocalValidator:
         """True when this location fired inside the coalescing window.
 
         Exposed for the concurrency harness: repeat events at one location are
-        what produce the overlapping crew jurisdictions Equation (5) exists for.
+        what produce the overlapping crew jurisdictions handled by conflict resolution.
         """
         cutoff = event.timestamp - self.policy.same_event_window_s
         return any(l == event.location and t >= cutoff for (l, t) in self._recent)
@@ -310,6 +311,9 @@ class FidesInnovaClient:
         ``event``.  The Coordinator also checks quorum locally before action
         release; the contract repeats it as defense in depth.
         """
+        crew_class, support, required = event.tally()
+        if crew_class == "UNRESOLVED" or crew_class != decision.classification:
+            return False, "classification quorum absent or not aligned with decision"
         if self._w3 is None:
             self.connect()
 
@@ -323,8 +327,8 @@ class FidesInnovaClient:
                 decision.recommended_action,
                 bool(decision.requires_human_review),
                 bool(decision.degraded_mode),
-                len(event.votes),
-                int(event.approvals),
+                event.expected_voter_count or len(event.votes),
+                int(support),  # final-class matching votes
             ).call()
             return bool(valid), str(reason)
         except Exception as exc:

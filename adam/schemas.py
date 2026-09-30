@@ -11,8 +11,8 @@ without installing the package.
 The central object is :class:`DecisionObject` - the seven-field structure the
 Decision Agent must emit. :class:`EventTrace` records the audit tuple and, for
 new/reference runs, explicit acknowledgments from the enabled audit stores.
-The historical 446/459 figure is an end-to-end completion rate, not an
-independent dual-store persistence measurement.
+An end-to-end completion count is not an independent dual-store persistence
+measurement.
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ class SchemaViolation(ValueError):
 class DecisionObject:
     """The structured recommendation d_t produced by the Decision Agent.
 
-    Equation (3) defines d_t as the output of the local model over the fused
+    The manuscript defines d_t as the Decision-Agent output over the fused
     estimate, recent temporal context, and retrieved semantic memory. Section
     3.4.2 fixes the seven fields below.
     """
@@ -155,7 +155,7 @@ class DecisionObject:
 
     @property
     def severity_score(self) -> float:
-        """Numeric severity for Equation (5)."""
+        """Numeric severity used by conflict resolution."""
         return SEVERITY_SCORES[self.severity]
 
     @classmethod
@@ -234,30 +234,48 @@ class CrewEvent:
     severity_hint: str = "UNKNOWN"
     crew_members: List[str] = field(default_factory=list)
     votes: Dict[str, int] = field(default_factory=dict)
+    vote_errors: Dict[str, str] = field(default_factory=dict)
+    expected_voter_count: int = 0
+    final_classification: Optional[str] = None
 
     @staticmethod
     def new_id() -> str:
         return f"evt-{uuid.uuid4().hex[:12]}"
 
-    def record_vote(self, agent_id: str, approve: bool) -> None:
-        """Record one binary approval vote v_i(a_t). Equation (4).
+    def record_vote(self, agent_id: str, classification: str | int) -> None:
+        """Record one NORMAL/ANOMALY class vote; reject duplicate ballots.
 
-        Votes are keyed by issuing agent, so a single agent cannot inflate the
-        tally by voting twice. Section 4.5.1 notes that attributability is the
-        assumption the Table 8 bounds rest on; this mapping is where the
-        prototype enforces it.
+        Boolean approval/refusal is deliberately rejected; a refusal to approve
+        a proposal is not equivalent to voting NORMAL.
         """
-        if agent_id in self.votes:
-            raise ValueError(
-                f"agent {agent_id} has already voted on event {self.event_id}; "
-                f"duplicate votes would break the Table 8 tolerance bounds"
-            )
-        self.votes[agent_id] = 1 if approve else 0
+        from .coordination import normalize_class_vote
+
+        if agent_id in self.votes or agent_id in self.vote_errors:
+            raise ValueError(f"agent {agent_id} has already voted on event {self.event_id}")
+        self.votes[agent_id] = normalize_class_vote(classification)
+
+    def record_vote_error(self, agent_id: str, reason: str) -> None:
+        """Retain a missing ballot as an error, never substitute NORMAL."""
+        if agent_id in self.votes or agent_id in self.vote_errors:
+            raise ValueError(f"agent {agent_id} has already voted on event {self.event_id}")
+        self.vote_errors[agent_id] = reason
+
+    def tally(self, expected_voters: Optional[int] = None) -> tuple[str, int, int]:
+        """Return (final class, winning-vote count, required quorum)."""
+        from .coordination import majority_class
+
+        n = expected_voters or self.expected_voter_count or len(self.votes) + len(self.vote_errors)
+        return majority_class(self.votes, n)
 
     @property
     def approvals(self) -> int:
-        """q_t = sum of v_j(a_t) over the crew."""
-        return sum(self.votes.values())
+        """Legacy contract ABI field: votes agreeing with the final class.
+
+        NOT the count of ANOMALY votes; NORMAL majorities also require quorum.
+        Only useful after a successful classification tally.
+        """
+        cls, support, _ = self.tally()
+        return support if cls != "UNRESOLVED" else 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -265,7 +283,7 @@ class CrewEvent:
 
 @dataclass
 class StageLatencies:
-    """The six per-stage latencies of Equation (6), in milliseconds."""
+    """The six deployment-stage latencies, in milliseconds."""
 
     T_form: float = 0.0
     T_agg: float = 0.0
@@ -276,7 +294,7 @@ class StageLatencies:
 
     @property
     def total_ms(self) -> float:
-        """T_decision. Equation (6)."""
+        """End-to-end decision latency across the six recorded stages."""
         return self.T_form + self.T_agg + self.T_reason + self.T_gov + self.T_weav + self.T_bc
 
     @property
@@ -315,9 +333,8 @@ class EventTrace:
 
     The audit trace records the tuple <trigger, fused context, inference output,
     policy-validation result, final action>. :meth:`is_complete` is an explicit
-    commit predicate for new/reference traces. It must not be used to reinterpret
-    the historical 446/459 end-to-end completion denominator as an independently
-    measured dual-store persistence rate.
+    commit predicate for current traces. It must not be used to reinterpret an
+    end-to-end completion count as an independently measured persistence rate.
     """
 
     event_id: str
@@ -331,8 +348,21 @@ class EventTrace:
     fused_ppm: Optional[float] = None
     contributing_nodes: List[str] = field(default_factory=list)
 
-    # <inference output>
+    # <inference output>. The original model output is preserved separately.
     decision: Optional[DecisionObject] = None
+    initial_decision: Optional[DecisionObject] = None
+    # Current event's reasoner output when a concurrent recommendation wins.
+    local_decision: Optional[DecisionObject] = None
+    initial_classification: Optional[str] = None
+    final_classification: Optional[str] = None
+    classification_votes: Dict[str, int] = field(default_factory=dict)
+    vote_errors: Dict[str, str] = field(default_factory=dict)
+    crew_agreement_fraction: Optional[float] = None
+    # Model score refers to the initial Decision-Agent class, even on a flip.
+    model_confidence: Optional[float] = None
+    # Fraction of eligible voters supporting the final class; not a probability.
+    crew_support: Optional[float] = None
+    confidence_source: str = "decision_agent"
 
     # <policy validation result>
     governance_valid: Optional[bool] = None
@@ -344,6 +374,7 @@ class EventTrace:
     final_action: Optional[str] = None
     executed: bool = False
     conflict_resolved: bool = False
+    conflict_source_event_id: Optional[str] = None
 
     # Operational metadata
     latencies: StageLatencies = field(default_factory=StageLatencies)
@@ -406,14 +437,16 @@ class EventTrace:
             d["latencies"] = StageLatencies(**d["latencies"])
         if isinstance(d.get("resources"), dict):
             d["resources"] = ResourceCounters(**d["resources"])
-        dec = d.get("decision")
-        if isinstance(dec, dict):
-            dec = dict(dec)
-            dec.pop("repair_attempted", None)
-            degraded = dec.pop("degraded_mode", False)
-            obj = DecisionObject(**{k: dec[k] for k in DECISION_SCHEMA_FIELDS})
-            obj.degraded_mode = degraded
-            d["decision"] = obj
+        for field_name in ("decision", "initial_decision", "local_decision"):
+            dec = d.get(field_name)
+            if isinstance(dec, dict):
+                dec = dict(dec)
+                degraded = dec.pop("degraded_mode", False)
+                repaired = dec.pop("repair_attempted", False)
+                obj = DecisionObject(**{k: dec[k] for k in DECISION_SCHEMA_FIELDS})
+                obj.degraded_mode = degraded
+                obj.repair_attempted = repaired
+                d[field_name] = obj
         return cls(**d)
 
 

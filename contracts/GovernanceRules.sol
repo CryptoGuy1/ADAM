@@ -12,8 +12,8 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  *      contract disagree with the manuscript. Both are corrected here.
  *
  *      (1) QUORUM RULE. The previous `getRequiredConsensus` computed
- *          `ceil(n * 51 / 100)`, a percentage-of-voters rule. Equation (4)
- *          specifies strict majority, `gamma_crew = floor(n/2) + 1`, which is
+ *          `ceil(n * 51 / 100)`, a percentage-of-voters rule. The
+ *          manuscript specifies strict majority, `gamma_crew = floor(n/2) + 1`, which is
  *          the consensus rule recorded in the dataset (01_Config) and in the
  *          deployment failure notes of 05_D2_Coordination_Log. The two rules
  *          agree at odd n but the percentage rule understates quorum at even
@@ -21,7 +21,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  *          rounds up; n = 6 gives 4 vs 4; the divergence appears at
  *          fractional boundaries and made quorum depend on an arbitrary
  *          percentage constant rather than on the stated rule).
- *          `requiredQuorum` now implements Equation (4) directly, and the
+ *          `requiredQuorum` now implements the strict-majority rule directly, and the
  *          voter count it takes is the number of BALLOTING agents: the
  *          Coordinator tallies and does not vote, so the deployed crew of
  *          four agents supplies three ballots and a threshold of 2.
@@ -79,12 +79,12 @@ contract GovernanceRules is Ownable {
         minReputationScore = 0;
     }
 
-    // ==================== Quorum: Equation (4) ====================
+    // ==================== Classification quorum ====================
 
     /**
      * @notice Crew-level quorum threshold gamma_crew = floor(n/2) + 1.
      * @param crewSize Number of VOTING agents in the crew.
-     * @return The number of approving votes required before execution.
+     * @return Matching votes required for either final event class.
      *
      * @dev Strict majority. Solidity integer division floors, so the
      *      expression is exactly the rule recorded in the dataset
@@ -94,7 +94,7 @@ contract GovernanceRules is Ownable {
      *      At the deployed three voters the threshold is 2: any two of the
      *      three role-specific checks must agree. For every crewSize >= 2 the
      *      threshold is at least 2, so no single agent can unilaterally
-     *      approve an action (Section 3.2.4). The minCrewSize floor of 2
+     *      determine a final class (Section 3.2.4). The minCrewSize floor of 2
      *      keeps the runtime out of the one-voter regime, where a strict
      *      majority of one would be unilateral.
      */
@@ -117,18 +117,18 @@ contract GovernanceRules is Ownable {
     }
 
     /**
-     * @notice True when the approving votes meet quorum. Equation (4).
+     * @notice True when votes supporting the final class meet quorum.
      */
     function quorumSatisfied(
-        uint256 approvals,
-        uint256 crewSize
+        uint256 classSupport,
+        uint256 voterCount
     ) external pure returns (bool) {
-        return approvals >= requiredQuorum(crewSize);
+        return classSupport >= requiredQuorum(voterCount);
     }
 
     /**
      * @notice True when compromised agents alone could supply quorum.
-     * @dev The "Subvertible" column of Table 8.
+     * @dev Analytical helper for colluding-voter bounds; not a measured BFT claim.
      */
     function isSubvertible(
         uint256 crewSize,
@@ -167,11 +167,12 @@ contract GovernanceRules is Ownable {
     /**
      * @notice On-chain policy check, mirroring adam.governance.chain.LocalValidator.
      * @param methanePpm       Triggering concentration.
-     * @param confidenceScaled Model confidence x 100.
+     * @param confidenceScaled Initial Decision-Agent score x 100. After a
+     *                         crew class flip this is not final-class confidence.
      * @param severity         Severity label, e.g. "HIGH".
      * @param requiresReview   Whether the decision requests human review.
-     * @param crewSize         |C_t|.
-     * @param approvals        q_t.
+     * @param voterCount       Number of voting roles for this event.
+     * @param classSupport     Votes matching the selected final class.
      * @return valid  Whether the action may execute.
      * @return reason Human-readable justification, recorded in the audit trace.
      */
@@ -183,15 +184,15 @@ contract GovernanceRules is Ownable {
         string calldata recommendedAction,
         bool requiresReview,
         bool degradedMode,
-        uint256 crewSize,
-        uint256 approvals
+        uint256 voterCount,
+        uint256 classSupport
     ) external view returns (bool valid, string memory reason) {
         // Formation/quorum checks are kept here as defense in depth. The
         // Python Coordinator applies the same quorum rule before execution.
-        if (crewSize < minCrewSize) {
-            return (false, "crew below minimum size (C4)");
+        if (voterCount < minCrewSize) {
+            return (false, "voting set below minimum size (C4)");
         }
-        if (approvals < requiredQuorum(crewSize)) {
+        if (classSupport < requiredQuorum(voterCount)) {
             return (false, "quorum not met");
         }
 

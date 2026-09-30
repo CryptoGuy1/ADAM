@@ -51,7 +51,7 @@ GREEN = "#009E73"
 RED = "#D55E00"
 INK = "#1a1a1a"
 
-WB = sys.argv[1] if len(sys.argv) > 1 else "data/ADAM_Dataset_Master.xlsx"
+WB = sys.argv[1] if len(sys.argv) > 1 else "data/ADAM_Dataset_Master_v14_reconciled.xlsx"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "figures"
 os.makedirs(OUT, exist_ok=True)
 
@@ -108,7 +108,7 @@ ax1.text(-0.30, 1.03, "(a)", transform=ax1.transAxes, fontsize=19,
 # ---- (b) ECDF against the deadline, censored failures at 30 s
 lat = np.sort(done["T_decision_total_ms"].values) / 1000.0
 n_all = len(co)
-# Completed events climb to 446/459; the 13 censored events account for the rest.
+# The completed fraction is computed from the loaded event records.
 ecdf_y = np.arange(1, len(lat) + 1) / n_all
 ax2.step(lat, ecdf_y, where="post", color=BLUE, linewidth=2.4, zorder=3,
          label=f"Completed events ($n={len(done)}$)")
@@ -135,7 +135,7 @@ ax2.plot(med, 0.5 * len(done) / n_all, marker="D", color=ORANGE, markersize=8,
 ax2.set_xlim(16.5, 31.5)
 ax2.set_ylim(0, 1.04)
 ax2.set_xlabel("End-to-end decision latency (s)", labelpad=10)
-ax2.set_ylabel("Fraction of the 459 deployment events")
+ax2.set_ylabel("Fraction of deployment events")
 ax2.grid(linestyle=":", linewidth=0.7, alpha=0.65)
 ax2.set_axisbelow(True)
 ax2.legend(frameon=False, loc="upper left")

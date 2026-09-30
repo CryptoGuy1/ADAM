@@ -11,17 +11,15 @@ memory and governance layers wrote.
 
 Algorithm 1 mapping
 -------------------
-    line 6      SensorAgent.publish_trigger        -> event e_t
-    line 7-9    Crew.form                          -> C_t, N_t
-    line 10     AggregatorAgent.aggregate          -> m_bar_t   (Eq. 2)
-    line 11     SemanticMemory.retrieve            -> h_past
-    line 12     DecisionAgent.reason               -> d_t       (Eq. 3)
-    line 13     d_t.recommended_action             -> a_t
-    line 14     CoordinatorAgent.collect_votes     -> q_t
-    line 15     CoordinatorAgent.validate          -> V, quorum (Eq. 4)
-    line 18     resolve_conflict                   -> a*        (Eq. 5)
-    line 20     persist                            -> chain + Weaviate
-    line 21     Crew.dissolve
+    sensor screening -> event trigger -> crew formation -> aggregation
+    -> semantic retrieval -> initial Decision Agent output
+    -> independent Sensor/Aggregator/Decision classification votes
+    -> strict majority or UNRESOLVED (withhold action)
+    -> class-aligned severity/action -> policy validation
+    -> required store acknowledgments -> action release or withholding
+    -> crew dissolution.
+
+Historical measurements are not inferred from these reference execution paths.
 """
 
 from __future__ import annotations
@@ -38,7 +36,8 @@ from .agents.roles import (
     SensorAgent,
     ValidationOutcome,
 )
-from .config import ADAMConfig, DEFAULT_CONFIG, SEVERITY_SCORES, quorum
+from .config import ADAMConfig, DEFAULT_CONFIG, SAME_EVENT_WINDOW_S, SEVERITY_SCORES, quorum
+from .coordination import UNRESOLVED, align_decision_to_crew
 from .llm.client import OllamaClient
 from .mechanisms import Candidate, FusionResult, resolve_conflict
 from .schemas import (
@@ -96,7 +95,7 @@ class Crew:
 
     @property
     def voter_count(self) -> int:
-        """Ballots available to Equation (4).
+        """Ballots available to the strict-majority classification rule.
 
         This, not :attr:`size`, is what quorum is computed over. The
         Coordinator tallies and does not vote (Section 3.2), so a four-agent
@@ -289,7 +288,7 @@ class ADAMNode:
                         cutoff_timestamp=event.timestamp,
                     )
 
-            # -- local reasoning (T_reason), Equation (3). C1 is a shared
+            # -- local reasoning (T_reason). C1 is a shared
             # end-to-end budget, not a per-stage timeout. If earlier stages
             # consume it, do not grant the reasoner an artificial grace period.
             spent_s = timer.total_ms / 1000.0
@@ -311,6 +310,10 @@ class ADAMNode:
                     deadline_s=remaining,
                 )
             decision = inference.decision
+            trace.local_decision = decision
+            trace.initial_decision = decision
+            trace.model_confidence = decision.confidence
+            trace.initial_classification = decision.classification
             trace.decision = decision
             trace.degraded_mode = decision.degraded_mode
 
@@ -324,8 +327,17 @@ class ADAMNode:
                     trace.resources = sampler.stop()
                 return trace
 
-            # -- votes and validation (T_gov), Equation (4)
+            # -- classification votes and validation (T_gov)
             with timer.stage("T_gov"):
+                decision, source_event_id = self._arbitrate_pending(event, decision)
+                if source_event_id is not None:
+                    trace.conflict_resolved = True
+                    trace.conflict_source_event_id = source_event_id
+                    trace.initial_decision = decision
+                    trace.initial_classification = decision.classification
+                    trace.model_confidence = decision.confidence
+                    trace.degraded_mode = decision.degraded_mode
+                    trace.decision = decision
                 context = {
                     "trigger_ppm": event.trigger_ppm,
                     "trigger_node": event.trigger_node,
@@ -334,22 +346,42 @@ class ADAMNode:
                     "baseline_window": list(event_baseline),
                 }
                 crew.coordinator.collect_votes(event, crew.voters, decision, context)
-                outcome = crew.coordinator.validate(event, decision, crew.voter_count)
+                final_class, support, required = crew.coordinator.tally(event, crew.voter_count)
+                trace.classification_votes = dict(event.votes)
+                trace.vote_errors = dict(event.vote_errors)
+                trace.final_classification = final_class
+                trace.quorum_required = required
+                trace.quorum_achieved = support
+                if final_class == UNRESOLVED:
+                    # Neither NORMAL nor ANOMALY has quorum. No policy call,
+                    # ledger write, or action release may follow.
+                    trace.failure_stage = "classification_quorum"
+                    trace.governance_reason = "classification quorum not reached"
+                else:
+                    trace.crew_agreement_fraction = support / crew.voter_count
+                    trace.crew_support = trace.crew_agreement_fraction
+                    decision, trace.confidence_source = align_decision_to_crew(
+                        decision, final_class, fusion.fused_ppm,
+                        support, crew.voter_count,
+                    )
+                    trace.decision = decision
+                    outcome = crew.coordinator.validate(event, decision, crew.voter_count)
+                    trace.governance_valid = outcome.governance_valid
+                    trace.governance_reason = outcome.reason
 
-            trace.governance_valid = outcome.governance_valid
-            trace.quorum_required = outcome.quorum_required
-            trace.quorum_achieved = outcome.quorum_achieved
-            trace.governance_reason = outcome.reason
+            if final_class == UNRESOLVED:
+                trace.latencies = timer.to_stage_latencies()
+                if sampler:
+                    trace.resources = sampler.stop()
+                return trace
 
             # -- action selection (Algorithm 1 line 17); execution is withheld
             # until the trace commits, so nothing is marked executed here.
             if outcome.approved:
                 trace.final_action = decision.recommended_action
             else:
-                # A rejection is not a conflict: Equation (5) arbitrates between
-                # competing concurrent recommendations, of which there is only
-                # one here. The safe fallback records what would have been done
-                # without executing it.
+                # Governance rejection withholds the action. Conflict
+                # arbitration, when needed, occurred before crew voting.
                 trace.final_action = self._safe_fallback_action(event, decision)
             trace.executed = False
 
@@ -406,13 +438,8 @@ class ADAMNode:
     def _safe_fallback_action(
         self, event: CrewEvent, decision: DecisionObject
     ) -> str:
-        """Action recorded when governance or quorum rejects the proposal.
-
-        Distinct from Equation (5): no competing recommendation exists on this
-        path, so there is nothing to arbitrate. The action is recorded for the
-        audit trace only and is never executed.
-        """
-        return self._resolve(event, decision)
+        """Withheld action recorded after policy rejection, never executed."""
+        return "WITHHELD: validation failed, escalated for operator review"
 
     def _commit_acknowledged(self, trace: EventTrace) -> bool:
         """True when every enabled audit store acknowledged the trace commit.
@@ -429,51 +456,49 @@ class ADAMNode:
                 return False
         return True
 
-    # -- Equation (5) ------------------------------------------------------
+    # -- Conflict resolution ------------------------------------------------
 
-    def _resolve(self, event: CrewEvent, decision: DecisionObject) -> str:
-        """Deterministic conflict resolution. Algorithm 1 line 18, Equation (5).
+    def _arbitrate_pending(
+        self, event: CrewEvent, decision: DecisionObject
+    ) -> tuple[DecisionObject, Optional[str]]:
+        """Select a concurrent recommendation before classification voting.
 
-        Reached when governance validation fails or competing recommendations
-        arise. Section 4.6 notes this never fired across the 459 deployment
-        events, so it is exercised by the synthetic sweep rather than the field
-        data - but it must be present and correct for a larger deployment.
-
-        With a single candidate and no pending competitors, the safe outcome is
-        to withhold the action and defer to review rather than execute an
-        unvalidated recommendation.
+        Only recommendations for the same location and event window compete.
+        The selected decision still needs crew quorum and policy approval.
         """
-        now = time.time()
+        competitors = [
+            (pending_event, pending_decision)
+            for pending_event, pending_decision in self._pending
+            if pending_event.event_id != event.event_id
+            and pending_event.location == event.location
+            and abs(pending_event.timestamp - event.timestamp) <= SAME_EVENT_WINDOW_S
+            and pending_decision.recommended_action != decision.recommended_action
+        ]
+        if not competitors:
+            return decision, None
+
+        options = [(event, decision), *competitors]
         candidates = [
             Candidate(
-                action=decision.recommended_action,
-                severity=decision.severity_score,
-                timestamp=event.timestamp,
-                event_id=event.event_id,
+                action=proposal.recommended_action,
+                severity=proposal.severity_score,
+                timestamp=source.timestamp,
+                event_id=source.event_id,
             )
+            for source, proposal in options
         ]
-        for pending_event, pending_decision in self._pending:
-            candidates.append(
-                Candidate(
-                    action=pending_decision.recommended_action,
-                    severity=pending_decision.severity_score,
-                    timestamp=pending_event.timestamp,
-                    event_id=pending_event.event_id,
-                )
-            )
-
-        if len(candidates) == 1:
-            return "WITHHELD: validation failed, escalated for operator review"
-
         winner = resolve_conflict(candidates)
-        return winner.action
+        selected = next(
+            proposal for source, proposal in options if source.event_id == winner.event_id
+        )
+        return selected, winner.event_id
 
     def register_pending(self, event: CrewEvent, decision: DecisionObject) -> None:
-        """Register a concurrent unresolved recommendation for Equation (5).
+        """Register a concurrent unresolved recommendation for conflict resolution.
 
-        Used by the multi-crew concurrency harness. In the four-node deployment
-        this list stayed empty, which is why Section 4.6 reports the rule as
-        never triggered.
+        Eligible recommendations from the same location and event window are
+        ranked before the current event's crew votes. Callers clear this list
+        when the concurrent event window has closed.
         """
         self._pending.append((event, decision))
 

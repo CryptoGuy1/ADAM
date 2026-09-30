@@ -21,7 +21,7 @@ contract DecisionLogger {
         bytes32 eventId;
         uint256 methanePpm;
         string classification;     // ANOMALY | NORMAL
-        uint256 confidenceScaled;  // confidence x 100
+        uint256 confidenceScaled;  // initial Decision-Agent score x 100; not final-class probability on a flip
         string severity;
         string finalAction;
         bool governanceValid;

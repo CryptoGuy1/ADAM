@@ -4,14 +4,14 @@ adam.telemetry
 
 Per-stage timing and resource sampling.
 
-Figure 5 decomposes T_decision into six stages; Table 6 reports CPU, memory,
+Figure 5 decomposes T_decision into six stages; the resource section reports CPU, memory,
 bandwidth, and external cost per system. Both come from here, so the numbers in
 the paper are a direct readout of the trace rather than a separate measurement
 pass.
 
 CPU accounting
 --------------
-Table 6 reports the mean of per-window peak CPU utilization for sampled 60-s
+The resource analysis reports the mean of per-window peak CPU utilization for sampled 60-s
 windows. Constraint C2 is evaluated on the sampled non-inference windows, while
 crew-active windows are reported separately. :class:`ResourceSampler` exposes
 the per-window measurements used by reference reruns;
@@ -50,7 +50,7 @@ except ImportError:  # pragma: no cover
 
 
 class StageTimer:
-    """Accumulates per-stage wall-clock time for Equation (6).
+    """Accumulates per-stage wall-clock time for the deployment latency decomposition.
 
     Stages may be entered more than once per event (semantic memory is queried
     during aggregation and again on persistence); durations accumulate.
@@ -164,8 +164,8 @@ def _read_net_bytes() -> int:
 class ResourceSampler:
     """Samples CPU, memory, and network across one event.
 
-    Reports the *peak* CPU observed during the sampled window, which is the
-    Table 6 quantity. Sampling runs on a background thread at 10 Hz; on a
+    Reports the *peak* CPU observed during the sampled window, matching the
+    sampled-window statistic used by the resource analysis. Sampling runs on a background thread at 10 Hz; on a
     Raspberry Pi 5 this costs well under 1% of a core.
     """
 

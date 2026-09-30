@@ -1,5 +1,12 @@
 # ADAM — Agentic Decentralized Autonomous Machines
 
+> **Reference reconstruction (September 2026):** The crew-voting and failure-closed
+> protocol in `adam/agents/roles.py`, `adam/crew.py`, and `adam/schemas.py`
+> implements the revised manuscript specification. It is not presented as a
+> byte-identical reconstruction of lost historical deployment code. The
+> canonical analytical source is the reconciled V14 workbook; historical
+> measurements remain distinct from reconstructed/reference executions.
+
 Reference implementation and analysis code for:
 
 > **Agentic Decentralized Autonomous Machines (ADAM): Model-Flexible Edge Intelligence and Governance for DePIN Applications**
@@ -82,7 +89,8 @@ npm install --no-package-lock
 ```bash
 python -m adam.config
 python -m pytest tests/ -q
-python scripts/verify_manuscript_numbers.py data/ADAM_Dataset_Master.xlsx
+python scripts/verify_manuscript_numbers.py data/ADAM_Dataset_Master_v14_reconciled.xlsx
+python scripts/export_revised_statistics.py data/ADAM_Dataset_Master_v14_reconciled.xlsx
 ```
 
 For the complete workbook-backed recomputation (checks, Appendix A, and current
@@ -255,7 +263,12 @@ gamma_crew = floor(n_voters / 2) + 1
 ```
 
 The Coordinator tallies and does not vote. In the deployed full crew there are
-three voters, so two approvals are required.
+three voters, so two matching class votes are required.
+The optional reference `ConsensusValidator.sol` uses the same semantics on-chain:
+its ballots are explicit NORMAL/ANOMALY class votes, quorum is computed over the
+eligible voting set rather than all crew roles, and a two-voter split remains
+unresolved. `GovernanceRules.validateDecision` receives the number of voters and
+the support count for the selected final class as a defense-in-depth check.
 
 The active conflict resolver is:
 
@@ -315,7 +328,7 @@ The current public data record is:
 
 **Zenodo DOI: 10.5281/zenodo.21892655**
 
-The repository includes `data/ADAM_Dataset_Master.xlsx`. Its workbook export is
+The canonical analytical workbook is `data/ADAM_Dataset_Master_v14_reconciled.xlsx`. Its workbook export is
 explicitly **primary-channel only**:
 
 ```bash
@@ -350,6 +363,9 @@ data/
   loader.py                   D1 loader, workbook primary-channel exporter, simulator
   calibration.py              optional fold-local fusion-calibration sensitivity
 
+analysis/metrics.py           trial-level metrics and comparison utilities
+analysis/revised_statistics.py active 10+5+20 exact-Wilcoxon/Holm families
+
 baselines/systems.py          raw and fused baselines, cloud and single-agent comparators
 ablations/systems.py          ADAM_LLM and architectural ablations
 
@@ -361,10 +377,16 @@ experiments/
   run_deployment.py           reference replay / scaling harness
   run_security.py             active security stress-test harness
   reproduce_security.py       workbook-backed security recomputation
+  phase5_provenance.py        source-linked security/resource extraction
+  phase5_claim_checks.py      manuscript claim checks for retained source records
 
 scripts/
   derive_deployment_semantics.py
   verify_manuscript_numbers.py
+  export_revised_statistics.py
+  phase5_verify.py
+  figure8_resources_publication.py
+  figure10_security_publication.py
   run_manifest.py
   deploy.js
   verify_chain.py
@@ -403,15 +425,18 @@ tests/
 | Decision-Agent substitution | `experiments.run_decision_agent_substitution` |
 | Degraded-input construction | `experiments/degraded_harness.py` |
 | Deployment/scaling reference replay | `experiments.run_deployment` |
-| Statistical metrics / Holm | `analysis.metrics` |
+| Statistical metrics | `analysis.metrics` |
+| Active 10+5+20 Wilcoxon/Holm families | `analysis.revised_statistics`, `scripts/export_revised_statistics.py` |
+| V14 security/resource source audit | `scripts/phase5_verify.py` |
+| Source-linked resource/security figures | `scripts/figure8_resources_publication.py`, `scripts/figure10_security_publication.py` |
 | Appendix A | `python -m adam.llm.prompt --latex` |
 | Provenance manifest | `scripts/run_manifest.py` |
 
 ## Scope and limitations
 
 - Four physical Raspberry Pi 5 nodes in one laboratory.
-- Co-located sensors observe the same controlled chamber exposure; this is not a
-  spatially distributed field deployment.
+- The four MQ-4 sensors and co-located NDIR reference were exposed in the same
+  laboratory fume-hood test area; this is not a spatially distributed field deployment.
 - One gas species and a restricted experimental concentration range.
 - The approximately 19-s workflow is an early screening/accountability system,
   not a certified emergency shutdown or ignition-protection mechanism.
@@ -427,3 +452,110 @@ tests/
 
 Code: MIT (`LICENSE`).
 Deposited data: CC BY 4.0 (`LICENSE-DATA`).
+
+
+## Phase 3: separately identified six-stage scale-out reconstruction
+
+The historical `scripts/figure7_scalability.py` and workbook `08_Scalability_Log`
+continue to reproduce **archived** model estimates and their matched-level
+2.373% MAPE. That number is **not** the validation error of the new model.
+
+The new model uses only the 72 physically measured records exported from the
+reconciled V14 workbook as `data/scalability_hardware_v14.csv`. Its adjacent
+`.manifest.json` identifies the source workbook and source-file SHA-256. The
+source workbook remains unchanged. Run:
+
+```bash
+python -m experiments.scalability_stage_model \
+  --hardware data/scalability_hardware_v14.csv \
+  --out results/phase3
+python scripts/plot_reference_stage_scalability.py \
+  --hardware data/scalability_hardware_v14.csv \
+  --level-means results/phase3/stage_scaleout_level_means.csv \
+  --out results/phase3
+```
+
+The generator produces `strict_lolo_validation.csv`,
+`stage_scaleout_reference_model.csv`, `stage_scaleout_level_means.csv`,
+`scalability_manifest.json` with output digests, and two **preview** charts.
+It withholds one physical node level from all calibration and anchor operations
+when calculating strict leave-one-level-out error. It then resamples complete
+stage vectors, derives nonnegative coordination-stage OLS slopes from physical
+levels 1--4, and estimates N=4,6,8,12,16 under a fixed four-event batch,
+eight logical sensor streams, four logical workers, and 30,000 vectors.
+Reasoning, query, and blockchain stages use the four-node reference distribution
+rather than an invented increase in inference/ledger capacity. Source code and
+limitations are documented in `docs/RECONSTRUCTION_PHASE3.md`.
+
+**Do not overwrite the historical scale-out sheets/figures with these outputs**
+without revising Methods, Results, the associated captions/table, and the
+archived-versus-reconstructed provenance distinction together. The model is a
+conditional software estimate; it is not a physical measurement at N>4.
+
+## Phase 4: new degraded-condition execution (not historical reproduction)
+
+See [`docs/RECONSTRUCTION_PHASE4.md`](docs/RECONSTRUCTION_PHASE4.md) for the
+four-node provenance gate, fresh per-condition LLM inference, causal retrieval
+traces and full/partial-coverage scoring. `fixture` mode is a deterministic
+software test double and **must not** be cited as the historical study.
+
+
+## Phase 5 — security and resource provenance gate (September 2026)
+
+`make phase5-audit` (or specify `PHASE5_MASTER=/path/to/approved.xlsx`)
+checks the workbook fingerprint before exporting the four security-event sheets and
+resource-log sheet read-only. Outputs include source hashes, row-level input exports,
+recomputed denominators and metrics, numeric manuscript-claim checks, and candidate
+Figure 10/8 visualizations. This is **workbook-backed recomputation only**, not a
+rerun of the historical physical experiments or independent verification of all
+network egress or per-store persistence. The bundled earlier workbook has a
+different SHA-256 and is intentionally rejected by this V14-targeted command.
+
+`scripts/phase5_verify.py --input-dir <csv_export> --source-type synthetic_fixture
+--out <output> --plot` is a diagnostic mode. Fixture plots carry an explicit
+non-publication label. Historical CSV mode requires the exact V14 workbook hash
+and a matching manifest produced by the read-only exporter. The old
+`scripts/figure8_security.py` and `scripts/figure6_resources.py` are retained as
+legacy scripts but are no longer invoked by `make deposit-figures`; their old
+numbering/captions and component-memory graphics are not current publication
+figures. For Figure 8, the Phase 5 candidate shows measured state means without
+pretending that the component budget is process-by-process measurement.
+
+The new source audit does not infer an independent failed-fallback denominator
+from `Fallback_Triggered`, which is itself an outcome field. It separately
+reports crew continuation *among* fallback-triggered events. It also distinguishes
+instrumented external inference bytes from total network traffic, and sampled
+window-peak CPU from time-weighted utilization.
+
+
+## Phase 6 — V14 evidence reconciliation and release-candidate gate
+
+Phase 6 closes the workbook-backed security/resource gate and replaces reliance
+on stale statistical summary sheets with direct recomputation from retained
+trial-level records. The reconciled V14 workbook contains a historical
+`04_D1_Statistical_Tests` sheet from an earlier comparison family and no
+`18_Revised_Statistical_Tests` sheet. The active manuscript families are therefore
+computed by `analysis/revised_statistics.py` and exported with:
+
+```bash
+make stats
+```
+
+The resulting families contain 10 main benchmark comparisons, 5 Decision-Agent
+substitution comparisons, and 20 degraded-condition comparisons. Exact
+Wilcoxon tests (after zero-pair removal), 10,000 paired bootstrap resamples, and
+within-family Holm adjustments reproduce the current manuscript values after
+rounding. The historical workbook sheet is left unchanged for provenance.
+
+The local release-candidate evidence gate is:
+
+```bash
+make release-audit
+```
+
+It runs the current test suite, verifies workbook-backed manuscript quantities,
+exports all 35 revised comparisons, executes the V14 security/resource source
+audit, and regenerates the source-linked Figure 8 and Figure 10 candidates. A
+passing local gate does not publish GitHub or Zenodo and does not imply that
+missing historical raw streams, ballots, per-store acknowledgments, or runtime
+images have been reconstructed. See `docs/RECONSTRUCTION_PHASE6.md`.

@@ -9,16 +9,26 @@ failures, 4.3 resources, 4.4 node scaling, 4.5 security. Values quoted in the
 article at coarser precision are checked at that precision.
 """
 
+import json
 import math
 import sys
 import warnings
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 warnings.filterwarnings("ignore")
 
+CLAIMS_PATH = ROOT / "data" / "manuscript_result_claims.json"
+with CLAIMS_PATH.open(encoding="utf-8") as claims_file:
+    CLAIMS = json.load(claims_file)
+
 import numpy as np
 import pandas as pd
+from adam.config import DECISION_DEADLINE_S, THRESHOLD_PPM
 
-WB = sys.argv[1] if len(sys.argv) > 1 else "data/ADAM_Dataset_Master.xlsx"
+WB = sys.argv[1] if len(sys.argv) > 1 else "data/ADAM_Dataset_Master_v14_reconciled.xlsx"
 xl = pd.ExcelFile(WB)
 
 FAILURES = []
@@ -35,87 +45,65 @@ def chk(label, got, want, tol=0.0005):
 tr = pd.read_excel(xl, "03_D1_Trial_Results")
 pred = pd.read_excel(xl, "06A_Event_Predictions", header=3).dropna(subset=["Event_ID"])
 trig = pd.read_excel(xl, "D1_RawTrigger_Log")
-tests = pd.read_excel(xl, "04_D1_Statistical_Tests", header=1).set_index("Comparison")
+from analysis.revised_statistics import main_benchmark_family, substitution_family, degraded_family
+
+main_stats = {r.comparison: r for r in main_benchmark_family(tr)}
 
 S = lambda s, c: (tr[tr.System == s][c].mean(), tr[tr.System == s][c].std(ddof=1))
-TABLE4 = {  # system: (P, R, F1, FAR)
-    "ADAM_LLM": (0.901, 0.891, 0.896, 0.080),
-    "Static_Threshold": (0.795, 0.786, 0.790, 0.165),
-    "Random_Forest": (0.860, 0.824, 0.841, 0.110),
-    "RandomForest_Fused": (0.946, 0.912, 0.928, 0.044),
-    "GBM_Fused": (0.951, 0.913, 0.931, 0.039),
-    "Cloud_Only": (0.904, 0.899, 0.901, 0.078),
-    "SingleAgent": (0.881, 0.830, 0.855, 0.092),
-    "ADAM_NoAgg": (0.889, 0.851, 0.869, 0.087),
-    "ADAM_NoLLM": (0.864, 0.817, 0.840, 0.105),
-    "ADAM_NoBlockchain": (0.902, 0.877, 0.889, 0.078),
-    "ADAM_NoWeaviate": (0.883, 0.853, 0.868, 0.093),
-}
+TABLE4 = CLAIMS["tables"]["TABLE4"]
 for sysname, (p_, r_, f_, fa_) in TABLE4.items():
     for col, want in zip(("Precision", "Recall", "F1", "FAR"), (p_, r_, f_, fa_)):
         chk(f"4.1 {sysname} {col}", S(sysname, col)[0], want)
-chk("4.1 ADAM F1 sd", S("ADAM_LLM", "F1")[1], 0.009)
-chk("4.1 margin over Static (pts)", S("ADAM_LLM", "F1")[0] - S("Static_Threshold", "F1")[0], 0.106, 0.001)
-chk("4.1 SingleAgent gap (pts)", S("ADAM_LLM", "F1")[0] - S("SingleAgent", "F1")[0], 0.041, 0.001)
+chk("4.1 ADAM F1 sd", S("ADAM_LLM", "F1")[1], CLAIMS["checks"]['4.1 ADAM F1 sd'])
+chk("4.1 margin over Static (pts)", S("ADAM_LLM", "F1")[0] - S("Static_Threshold", "F1")[0], CLAIMS["checks"]['4.1 margin over Static (pts)'], 0.001)
+chk("4.1 SingleAgent gap (pts)", S("ADAM_LLM", "F1")[0] - S("SingleAgent", "F1")[0], CLAIMS["checks"]['4.1 SingleAgent gap (pts)'], 0.001)
 
 lab = pd.read_excel(xl, "02_D1_Labeled_Events")
 v = (lab["Raw_Instantaneous_PPM"] - lab["Reference_Sensor_PPM"]).groupby(lab["Node_ID"]).var(ddof=1)
 w = (1 / v) / (1 / v).sum()
-chk("4.1 variance min ppm2", v.min(), 6073.2, 0.5)
-chk("4.1 variance max ppm2", v.max(), 6609.6, 0.5)
-chk("4.1 norm weight min", w.min(), 0.239, 0.001)
-chk("4.1 norm weight max", w.max(), 0.260, 0.001)
+chk("4.1 variance min ppm2", v.min(), CLAIMS["checks"]['4.1 variance min ppm2'], 0.5)
+chk("4.1 variance max ppm2", v.max(), CLAIMS["checks"]['4.1 variance max ppm2'], 0.5)
+chk("4.1 norm weight min", w.min(), CLAIMS["checks"]['4.1 norm weight min'], 0.001)
+chk("4.1 norm weight max", w.max(), CLAIMS["checks"]['4.1 norm weight max'], 0.001)
 
-WILCOXON = {
-    "ADAM_vs_Static": (0.001953125, 0.01953125),
-    "ADAM_vs_RF_Raw": (0.001953125, 0.01953125),
-    "ADAM_vs_RF_Fused": (0.005859375, 0.01953125),
-    "ADAM_vs_GBM_Fused": (0.001953125, 0.01953125),
-    "ADAM_vs_Cloud": (0.048828125, 0.09765625),
-    "ADAM_vs_SingleAgent": (0.001953125, 0.01953125),
-    "ADAM_vs_NoAgg": (0.00390625, 0.01953125),
-    "ADAM_vs_NoLLM": (0.001953125, 0.01953125),
-    "ADAM_vs_NoBlockchain": (0.09765625, 0.09765625),
-    "ADAM_vs_NoWeaviate": (0.00390625, 0.01953125),
-}
+WILCOXON = CLAIMS["tables"]["WILCOXON"]
 for key, (pe, ph) in WILCOXON.items():
-    chk(f"4.1 {key} p_exact", tests.loc[key, "P_Exact"], pe)
+    row = main_stats[key]
+    chk(f"4.1 {key} p_exact", row.p_exact, pe)
     if ph is not None:
-        chk(f"4.1 {key} p_Holm", tests.loc[key, "P_Holm"], ph)
+        chk(f"4.1 {key} p_Holm", row.p_holm, ph)
 f1p = tr.pivot(index="Trial", columns="System", values="F1")
 dc = f1p["Cloud_Only"] - f1p["ADAM_LLM"]
-chk("4.1 Cloud median diff", dc.median(), 0.007)
-chk("4.1 Cloud trials favoring cloud", (dc > 0).sum(), 8, 0)
+chk("4.1 Cloud median diff", dc.median(), CLAIMS["checks"]['4.1 Cloud median diff'])
+chk("4.1 Cloud trials favoring cloud", (dc > 0).sum(), CLAIMS["checks"]['4.1 Cloud trials favoring cloud'], 0)
 db = f1p["ADAM_LLM"] - f1p["ADAM_NoBlockchain"]
 nz = db[db != 0]
-chk("4.1 NoBlockchain effective n", len(nz), 9, 0)
-chk("4.1 NoBlockchain favoring ADAM", (nz > 0).sum(), 8, 0)
-chk("4.1 NoBlockchain median", nz.median(), 0.009)
+chk("4.1 NoBlockchain effective n", len(nz), CLAIMS["checks"]['4.1 NoBlockchain effective n'], 0)
+chk("4.1 NoBlockchain favoring ADAM", (nz > 0).sum(), CLAIMS["checks"]['4.1 NoBlockchain favoring ADAM'], 0)
+chk("4.1 NoBlockchain median", nz.median(), CLAIMS["checks"]['4.1 NoBlockchain median'])
 
 m = trig.merge(pred[["Event_ID", "ADAM_LLM", "Static_Threshold"]], on="Event_ID")
-above = m["Raw_Instantaneous_PPM"] >= 1000
+above = m["Raw_Instantaneous_PPM"] >= THRESHOLD_PPM
 anom = m["Ground_Truth_Label"] == "anomaly"
-chk("4.1 anomalies above gate", (anom & above).sum(), 707, 0)
-chk("4.1 anomalies below gate", (anom & ~above).sum(), 193, 0)
-chk("4.1 triggered events", above.sum(), 889, 0)
+chk("4.1 anomalies above gate", (anom & above).sum(), CLAIMS["checks"]['4.1 anomalies above gate'], 0)
+chk("4.1 anomalies below gate", (anom & ~above).sum(), CLAIMS["checks"]['4.1 anomalies below gate'], 0)
+chk("4.1 triggered events", above.sum(), CLAIMS["checks"]['4.1 triggered events'], 0)
 m["ADAM_Derived"] = np.where(above, m["ADAM_LLM"], "normal")
 
-for col, ra, rb, ro in [("Static_Threshold", 1.000, 0.000, 0.786),
-                        ("ADAM_Derived", 0.976, 0.000, 0.767),
-                        ("ADAM_LLM", 0.976, 0.580, 0.891)]:
+for col, ra, rb, ro in CLAIMS["series"]["recall_by_system"]:
     hit = (m[col] == "anomaly") & anom
     chk(f"4.1 {col} recall above", hit[above].sum() / (anom & above).sum(), ra)
     chk(f"4.1 {col} recall below", hit[~above].sum() / (anom & ~above).sum(), rb)
     chk(f"4.1 {col} recall overall", hit.sum() / anom.sum(), ro)
-chk("4.1 triggered FP static", ((m["Static_Threshold"] == "anomaly") & ~anom & above).sum(), 182, 0)
-chk("4.1 triggered FP derived deployment", ((m["ADAM_Derived"] == "anomaly") & ~anom & above).sum(), 73, 0)
+chk("4.1 triggered FP static", ((m["Static_Threshold"] == "anomaly") & ~anom & above).sum(), CLAIMS["checks"]['4.1 triggered FP static'], 0)
+chk("4.1 triggered FP derived deployment", ((m["ADAM_Derived"] == "anomaly") & ~anom & above).sum(), CLAIMS["checks"]['4.1 triggered FP derived deployment'], 0)
 
 # Deployment semantics are a deterministic transform of frozen benchmark
 # predictions: exact identity above the gate, NORMAL below it.
 gate_ident = m.loc[above, "ADAM_Derived"].str.lower().ne(m.loc[above, "ADAM_LLM"].str.lower())
-chk("4.1 above-gate prediction identity (mismatches)", gate_ident.sum(), 0, 0)
+chk("4.1 above-gate prediction identity (mismatches)", gate_ident.sum(), CLAIMS["checks"]['4.1 above-gate prediction identity (mismatches)'], 0)
 chk("4.1 below-gate all normal (exceptions)",
-    m.loc[~above, "ADAM_Derived"].str.lower().ne("normal").sum(), 0, 0)
+    m.loc[~above, "ADAM_Derived"].str.lower().ne("normal").sum(), CLAIMS["checks"]['4.1 below-gate all normal (exceptions)'], 0)
 
 def _trial_metrics(g):
     yy = g["Ground_Truth_Label"].str.lower().eq("anomaly")
@@ -129,78 +117,71 @@ def _trial_metrics(g):
     return pd.Series({"Precision": precision, "Recall": recall, "F1": f1, "FAR": far})
 
 g10 = m.groupby("Trial", sort=True).apply(_trial_metrics)
-for col, mean_, sd_ in [("Precision", 0.904, 0.011), ("Recall", 0.767, 0.028),
-                        ("F1", 0.830, 0.019), ("FAR", 0.066, 0.007)]:
+for col, mean_, sd_ in CLAIMS["series"]["deployment_metrics"]:
     chk(f"4.1 deployment {col} mean", g10[col].mean(), mean_)
     chk(f"4.1 deployment {col} sd", g10[col].std(ddof=1), sd_)
 
 latp = tr.pivot(index="Trial", columns="System", values="T_decision_ms")
-for sysname, want in [("Static_Threshold", 0.3), ("Random_Forest", 0.4),
-                      ("ADAM_NoLLM", 1.3), ("ADAM_LLM", 18.8), ("Cloud_Only", 12.9)]:
+for sysname, want in CLAIMS["series"]["latency_by_system"]:
     chk(f"4.1 latency {sysname} (s)", latp[sysname].mean() / 1e3, want, 0.05)
 d = latp["ADAM_LLM"] - latp["ADAM_NoBlockchain"]
-chk("4.1 blockchain delta (ms)", d.mean(), 246, 1); chk("4.1 blockchain trials", (d > 0).sum(), 7, 0)
+chk("4.1 blockchain delta (ms)", d.mean(), CLAIMS["checks"]['4.1 blockchain delta (ms)'], 1); chk("4.1 blockchain trials", (d > 0).sum(), CLAIMS["checks"]['4.1 blockchain trials'], 0)
 d = latp["ADAM_LLM"] - latp["ADAM_NoWeaviate"]
-chk("4.1 weaviate delta (ms)", d.mean(), 83, 1); chk("4.1 weaviate trials", (d > 0).sum(), 6, 0)
+chk("4.1 weaviate delta (ms)", d.mean(), CLAIMS["checks"]['4.1 weaviate delta (ms)'], 1); chk("4.1 weaviate trials", (d > 0).sum(), CLAIMS["checks"]['4.1 weaviate trials'], 0)
 d = latp["ADAM_NoAgg"] - latp["ADAM_LLM"]
-chk("4.1 no-agg delta (ms)", d.mean(), 451, 1); chk("4.1 no-agg trials", (d > 0).sum(), 9, 0)
+chk("4.1 no-agg delta (ms)", d.mean(), CLAIMS["checks"]['4.1 no-agg delta (ms)'], 1); chk("4.1 no-agg trials", (d > 0).sum(), CLAIMS["checks"]['4.1 no-agg trials'], 0)
 
 # ---------------------------------------------------------------- 4.2
 co = pd.read_excel(xl, "05_D2_Coordination_Log")
 done = co[co["Success"].astype(str).str.lower() == "yes"]
 fail = co[co["Success"].astype(str).str.lower() != "yes"]
-chk("4.2 events", len(co), 459, 0)
-chk("4.2 completed", len(done), 446, 0)
-chk("4.2 failures", len(fail), 13, 0)
+chk("4.2 events", len(co), CLAIMS["checks"]['4.2 events'], 0)
+chk("4.2 completed", len(done), CLAIMS["checks"]['4.2 completed'], 0)
+chk("4.2 failures", len(fail), CLAIMS["checks"]['4.2 failures'], 0)
 tf = done["T_form_ms"]
-chk("4.2 formation mean", tf.mean(), 2076, 1)
-chk("4.2 formation sd", tf.std(ddof=1), 182, 1)
-chk("4.2 formation median", tf.median(), 2078, 1)
-chk("4.2 formation P95", np.percentile(tf, 95), 2373, 1)
+chk("4.2 formation mean", tf.mean(), CLAIMS["checks"]['4.2 formation mean'], 1)
+chk("4.2 formation sd", tf.std(ddof=1), CLAIMS["checks"]['4.2 formation sd'], 1)
+chk("4.2 formation median", tf.median(), CLAIMS["checks"]['4.2 formation median'], 1)
+chk("4.2 formation P95", np.percentile(tf, 95), CLAIMS["checks"]['4.2 formation P95'], 1)
 fday = done.groupby("Day")["T_form_ms"].mean()
-chk("4.2 per-day formation span (ms)", fday.max() - fday.min(), 9, 1.5)
+chk("4.2 per-day formation span (ms)", fday.max() - fday.min(), CLAIMS["checks"]['4.2 per-day formation span (ms)'], 1.5)
 lday = done.groupby("Day")["T_decision_total_ms"].mean()
-chk("4.2 per-day latency span (ms)", lday.max() - lday.min(), 80, 15)
+chk("4.2 per-day latency span (ms)", lday.max() - lday.min(), CLAIMS["checks"]['4.2 per-day latency span (ms)'], 15)
 
 # Trigger publication: t_trigger -> first role acknowledgement (Sections 3.1.2, 4.2).
 pub = (done["t_sensor_join"] - done["t_trigger"]).dt.total_seconds() * 1e3
-chk("4.2 publication mean (ms)", pub.mean(), 472, 1)
-chk("4.2 publication sd (ms)", pub.std(ddof=1), 267, 1)
-chk("4.2 publication median (ms)", pub.median(), 439, 1)
-chk("4.2 publication P95 (ms)", np.percentile(pub, 95), 1005, 2)
-chk("4.2 publication share of T_form (%)", pub.mean() / tf.mean() * 100, 22.7, 0.1)
+chk("4.2 publication mean (ms)", pub.mean(), CLAIMS["checks"]['4.2 publication mean (ms)'], 1)
+chk("4.2 publication sd (ms)", pub.std(ddof=1), CLAIMS["checks"]['4.2 publication sd (ms)'], 1)
+chk("4.2 publication median (ms)", pub.median(), CLAIMS["checks"]['4.2 publication median (ms)'], 1)
+chk("4.2 publication P95 (ms)", np.percentile(pub, 95), CLAIMS["checks"]['4.2 publication P95 (ms)'], 2)
+chk("4.2 publication share of T_form (%)", pub.mean() / tf.mean() * 100, CLAIMS["checks"]['4.2 publication share of T_form (%)'], 0.1)
 chk("4.2 publication share of budget (%)",
-    pub.mean() / done["T_decision_total_ms"].mean() * 100, 2.5, 0.1)
+    pub.mean() / done["T_decision_total_ms"].mean() * 100, CLAIMS["checks"]['4.2 publication share of budget (%)'], 0.1)
 
 # Deployment window: the run spans three calendar days, not 72 h (Section 3.4.3).
 span_h = (co["Timestamp"].max() - co["Timestamp"].min()).total_seconds() / 3600
-chk("3.4.3 coordination span (h)", span_h, 56.7, 0.1)
-chk("4.3 event rate (per h)", len(co) / span_h, 8.1, 0.05)
+chk("3.4.3 coordination span (h)", span_h, CLAIMS["checks"]['3.4.3 coordination span (h)'], 0.1)
+chk("4.3 event rate (per h)", len(co) / span_h, CLAIMS["checks"]['4.3 event rate (per h)'], 0.05)
 td = done["T_decision_total_ms"]
-chk("4.2 decision mean (s)", td.mean() / 1e3, 18.99, 0.01)
-chk("4.2 decision median (s)", td.median() / 1e3, 19.00, 0.01)
-chk("4.2 decision P95 (s)", np.percentile(td, 95) / 1e3, 20.39, 0.01)
-chk("4.2 decision max (s)", td.max() / 1e3, 21.38, 0.01)
-STAGES42 = {"T_reason_ms": (15474, 81.5), "T_form_ms": (2076, 10.9),
-            "T_aggregate_ms": (437, 2.3), "T_validate_ms": (308, 1.6),
-            "T_weaviate_ms": (256, 1.3), "T_blockchain_ms": (439, 2.3)}
+chk("4.2 decision mean (s)", td.mean() / 1e3, CLAIMS["checks"]['4.2 decision mean (s)'], 0.01)
+chk("4.2 decision median (s)", td.median() / 1e3, CLAIMS["checks"]['4.2 decision median (s)'], 0.01)
+chk("4.2 decision P95 (s)", np.percentile(td, 95) / 1e3, CLAIMS["checks"]['4.2 decision P95 (s)'], 0.01)
+chk("4.2 decision max (s)", td.max() / 1e3, CLAIMS["checks"]['4.2 decision max (s)'], 0.01)
+STAGES42 = CLAIMS["tables"]["STAGES42"]
 tot = sum(done[c].mean() for c in STAGES42)
 for c, (ms_, pct) in STAGES42.items():
     chk(f"4.2 {c} mean", done[c].mean(), ms_, 1)
     chk(f"4.2 {c} share %", 100 * done[c].mean() / tot, pct, 0.06)
-chk("4.2 gov+bc share %", 100 * (done["T_validate_ms"] + done["T_blockchain_ms"]).mean() / td.mean(), 3.9, 0.05)
-chk("4.2 end-to-end completion %", 100 * len(done) / len(co), 97.2, 0.05)
+chk("4.2 gov+bc share %", 100 * (done["T_validate_ms"] + done["T_blockchain_ms"]).mean() / td.mean(), CLAIMS["checks"]['4.2 gov+bc share %'], 0.05)
+chk("4.2 end-to-end completion %", 100 * len(done) / len(co), CLAIMS["checks"]['4.2 end-to-end completion %'], 0.05)
 codes = fail["Notes"].str.extract(r"^(FAIL_[A-Z_]+)")[0].value_counts()
-for code, n in [("FAIL_LLM_DEADLINE", 3), ("FAIL_BLOCKCHAIN_COMMIT", 3),
-                ("FAIL_VALIDATION_REPAIR", 3), ("FAIL_CREW_QUORUM", 2),
-                ("FAIL_WEAVIATE_TIMEOUT", 2)]:
+for code, n in CLAIMS["series"]["failure_codes"]:
     chk(f"4.2 {code}", codes.get(code, 0), n, 0)
-chk("4.2 all failures censored at 30 s", (fail["T_decision_total_ms"] == 30000).sum(), 13, 0)
+chk("4.2 all failures censored at 30 s", (fail["T_decision_total_ms"] == DECISION_DEADLINE_S * 1000).sum(), CLAIMS["checks"]['4.2 all failures censored at 30 s'], 0)
 
 # ---------------------------------------------------------------- 4.3
 r = pd.read_excel(xl, "07_D2_Resource_Log")
-STATES = {"crew_active": (94.7, 3890, 41.0, 219), "monitoring": (28.0, 2349, 12.7, 434),
-          "idle": (11.3, 1530, 3.0, 256)}
+STATES = CLAIMS["tables"]["STATES"]
 for st, (cpu, ram, kb, n) in STATES.items():
     g = r[r["State"] == st]
     chk(f"4.3 {st} n", len(g), n, 0)
@@ -208,19 +189,15 @@ for st, (cpu, ram, kb, n) in STATES.items():
     chk(f"4.3 {st} RAM", g["RAM_MB"].mean(), ram, 1)
     chk(f"4.3 {st} KB/min", (g["Total_Bandwidth_Bytes"] / 1024).mean(), kb, 0.05)
 out = r[r["State"] != "crew_active"]
-chk("4.3 sustained CPU %", out["CPU_Peak_%"].mean(), 21.8, 0.05)
-chk("4.3 max CPU %", r["CPU_Peak_%"].max(), 97.7, 0.05)
+chk("4.3 sustained CPU %", out["CPU_Peak_%"].mean(), CLAIMS["checks"]['4.3 sustained CPU %'], 0.05)
+chk("4.3 max CPU %", r["CPU_Peak_%"].max(), CLAIMS["checks"]['4.3 max CPU %'], 0.05)
 ca = r[r["State"] == "crew_active"]
-chk("4.3 LLM KB/min", (ca["LLM_Bytes"] / 1024).mean(), 21.1, 0.05)
-chk("4.3 Weaviate KB/min", (ca["Weaviate_Bytes"] / 1024).mean(), 13.8, 0.05)
-chk("4.3 Blockchain KB/min", (ca["Blockchain_Bytes"] / 1024).mean(), 6.1, 0.05)
-chk("4.3 Full-NoLLM RAM (MB)", S("ADAM_LLM", "RAM_MB")[0] - S("ADAM_NoLLM", "RAM_MB")[0], 1540, 1)
-chk("4.3 share of 8 GB %", 100 * 3890 / 8192, 47.5, 0.05)
-TABLE6 = {"ADAM_LLM": (94.7, 3890, 163.9), "Static_Threshold": (14.5, 766, 26.5),
-          "Random_Forest": (18.0, 800, 34.0), "Cloud_Only": (22.3, 1063, 228.0),
-          "SingleAgent": (91.3, 3650, 133.0), "ADAM_NoAgg": (92.5, 3780, 205.0),
-          "ADAM_NoLLM": (32.8, 2350, 87.3), "ADAM_NoBlockchain": (92.4, 3710, 140.0),
-          "ADAM_NoWeaviate": (85.2, 3400, 112.0)}
+chk("4.3 LLM KB/min", (ca["LLM_Bytes"] / 1024).mean(), CLAIMS["checks"]['4.3 LLM KB/min'], 0.05)
+chk("4.3 Weaviate KB/min", (ca["Weaviate_Bytes"] / 1024).mean(), CLAIMS["checks"]['4.3 Weaviate KB/min'], 0.05)
+chk("4.3 Blockchain KB/min", (ca["Blockchain_Bytes"] / 1024).mean(), CLAIMS["checks"]['4.3 Blockchain KB/min'], 0.05)
+chk("4.3 Full-NoLLM RAM (MB)", S("ADAM_LLM", "RAM_MB")[0] - S("ADAM_NoLLM", "RAM_MB")[0], CLAIMS["checks"]['4.3 Full-NoLLM RAM (MB)'], 1)
+chk("4.3 share of 8 GB %", 100 * ca["RAM_MB"].mean() / 8192, CLAIMS["checks"]['4.3 share of 8 GB %'], 0.05)
+TABLE6 = CLAIMS["tables"]["TABLE6"]
 for sysname, (cpu, ram, bw) in TABLE6.items():
     chk(f"4.3 {sysname} CPU", S(sysname, "CPU_WindowPeak_Mean_%")[0], cpu, 0.05)
     chk(f"4.3 {sysname} RAM", S(sysname, "RAM_MB")[0], ram, 1)
@@ -234,21 +211,22 @@ so = sc[(sc["Fit_Eligible"].astype(str).str.lower() == "yes") & (sc["Node_Count"
 hm = hw.groupby("Node_Count")["T_decision_ms"].mean()
 sm = so.groupby("Node_Count")["T_decision_ms"].mean()
 im = sim.groupby("Node_Count")["T_decision_ms"].mean()
-chk("4.4 HW N=1 (s)", hm[1] / 1e3, 17.64, 0.005)
-chk("4.4 HW N=4 (s)", hm[4] / 1e3, 18.82, 0.005)
-chk("4.4 HW growth %", 100 * (hm[4] / hm[1] - 1), 6.7, 0.05)
-chk("4.4 SO N=4 (s)", sm[4] / 1e3, 18.55, 0.005)
-chk("4.4 SO N=16 (s)", sm[16] / 1e3, 20.94, 0.005)
-chk("4.4 SO growth %", 100 * (sm[16] / sm[4] - 1), 12.9, 0.05)
-chk("4.4 overall growth %", 100 * (sm[16] / hm[1] - 1), 18.7, 0.05)
-chk("4.4 margin at N=16 (s)", 30 - sm[16] / 1e3, 9.1, 0.05)
+chk("4.4 HW N=1 (s)", hm[1] / 1e3, CLAIMS["checks"]['4.4 HW N=1 (s)'], 0.005)
+chk("4.4 HW N=4 (s)", hm[4] / 1e3, CLAIMS["checks"]['4.4 HW N=4 (s)'], 0.005)
+chk("4.4 HW growth %", 100 * (hm[4] / hm[1] - 1), CLAIMS["checks"]['4.4 HW growth %'], 0.05)
+chk("4.4 SO N=4 (s)", sm[4] / 1e3, CLAIMS["checks"]['4.4 SO N=4 (s)'], 0.005)
+chk("4.4 SO N=16 (s)", sm[16] / 1e3, CLAIMS["checks"]['4.4 SO N=16 (s)'], 0.005)
+chk("4.4 SO growth %", 100 * (sm[16] / sm[4] - 1), CLAIMS["checks"]['4.4 SO growth %'], 0.05)
+chk("4.4 overall growth %", 100 * (sm[16] / hm[1] - 1), CLAIMS["checks"]['4.4 overall growth %'], 0.05)
+chk("4.4 margin at N=16 (s)", DECISION_DEADLINE_S - sm[16] / 1e3, CLAIMS["checks"]['4.4 margin at N=16 (s)'], 0.05)
 rel = [(im[k] - hm[k]) / hm[k] * 100 for k in [1, 2, 3, 4]]
-chk("4.4 MAPE %", np.mean(np.abs(rel)), 2.37, 0.01)
-chk("4.4 bias %", np.mean(rel), -0.02, 0.01)
-chk("4.4 worst level dev % (N=2)", rel[1], 4.0, 0.05)
+chk("4.4 MAPE %", np.mean(np.abs(rel)), CLAIMS["checks"]['4.4 MAPE %'], 0.01)
+chk("4.4 bias %", np.mean(rel), CLAIMS["checks"]['4.4 bias %'], 0.01)
+chk("4.4 worst level dev % (N=2)", rel[1], CLAIMS["checks"]['4.4 worst level dev % (N=2)'], 0.05)
 from scipy.optimize import curve_fit
 mdl = lambda N, t0, a, b: t0 + a * N ** b
-for name, df, want in [("HW", hw, (17380, 198.8, 1.462)), ("SO", so, (14262, 2950.6, 0.288))]:
+for name, df in (("HW", hw), ("SO", so)):
+    want = CLAIMS["tables"]["FIT_PARAMS"][name]
     g = df.groupby("Node_Count")["T_decision_ms"].mean()
     pw, _ = curve_fit(mdl, g.index.astype(float), g.values, p0=[15000, 500, 1.0], maxfev=60000)
     for pname, got, want_ in zip(("T0", "alpha", "beta"), pw, want):
@@ -256,8 +234,8 @@ for name, df, want in [("HW", hw, (17380, 198.8, 1.462)), ("SO", so, (14262, 295
 gm = hw.groupby("Node_Count")[["T_reason_ms", "T_cross_node_ms", "T_network_ms",
                                "T_merge_ms", "T_query_ms", "T_blockchain_ms"]].mean()
 coord = [c for c in gm.columns if c != "T_reason_ms"]
-chk("4.4 coordination growth (ms)", gm.loc[4, coord].sum() - gm.loc[1, coord].sum(), 594, 1)
-chk("4.4 reasoning growth (ms)", gm.loc[4, "T_reason_ms"] - gm.loc[1, "T_reason_ms"], 584, 1)
+chk("4.4 coordination growth (ms)", gm.loc[4, coord].sum() - gm.loc[1, coord].sum(), CLAIMS["checks"]['4.4 coordination growth (ms)'], 1)
+chk("4.4 reasoning growth (ms)", gm.loc[4, "T_reason_ms"] - gm.loc[1, "T_reason_ms"], CLAIMS["checks"]['4.4 reasoning growth (ms)'], 1)
 chk("4.4 stage sum = total N=1", gm.loc[1].sum(), hm[1], 1.5)
 chk("4.4 stage sum = total N=4", gm.loc[4].sum(), hm[4], 1.5)
 
@@ -267,9 +245,8 @@ llm = pd.read_excel(xl, "11_Security_LLM_Failure", header=2)
 poi = pd.read_excel(xl, "12_Security_Poisoning", header=2)
 egr = pd.read_excel(xl, "13_Security_Data_Leakage", header=2)
 det = inj["ADAM_Detected_Attack"].astype(str).str.lower().eq("yes")
-chk("4.5 injection detected", det.sum(), 27, 0)
-BY_TYPE = {"replay": (7, 7), "spike_inject": (10, 11), "zero_inject": (8, 9),
-           "constant_offset": (2, 3)}
+chk("4.5 injection detected", det.sum(), CLAIMS["checks"]['4.5 injection detected'], 0)
+BY_TYPE = CLAIMS["tables"]["BY_TYPE"]
 for atk, (d_, n_) in BY_TYPE.items():
     g = inj[inj["Attack_Type"] == atk]
     chk(f"4.5 {atk} n", len(g), n_, 0)
@@ -278,62 +255,60 @@ tp = ((inj["ADAM_Prediction"] == "anomaly") & (inj["Ground_Truth"] == "anomaly")
 fp = ((inj["ADAM_Prediction"] == "anomaly") & (inj["Ground_Truth"] == "normal")).sum()
 fn = ((inj["ADAM_Prediction"] == "normal") & (inj["Ground_Truth"] == "anomaly")).sum()
 tn = ((inj["ADAM_Prediction"] == "normal") & (inj["Ground_Truth"] == "normal")).sum()
-chk("4.5 attack F1", 2 * tp / (2 * tp + fp + fn), 0.769)
-chk("4.5 attack FAR", fp / (fp + tn), 0.176)
+chk("4.5 attack F1", 2 * tp / (2 * tp + fp + fn), CLAIMS["checks"]['4.5 attack F1'])
+chk("4.5 attack FAR", fp / (fp + tn), CLAIMS["checks"]['4.5 attack FAR'])
 lvl = poi.groupby("Num_Poisoned_Entries").apply(lambda g: ((g["ADAM_Prediction"] == g["Ground_Truth"]).sum(), len(g)))
-for level, (ok_, n_) in [(0, (8, 8)), (5, (7, 8)), (10, (6, 7)), (20, (6, 7))]:
+for level, (ok_, n_) in CLAIMS["series"]["poisoning_groups"]:
     chk(f"4.5 poisoning L{level} correct", lvl.loc[level][0], ok_, 0)
     chk(f"4.5 poisoning L{level} n", lvl.loc[level][1], n_, 0)
-chk("4.5 retrieval affected", poi["Retrieval_Affected"].astype(str).str.lower().eq("yes").sum(), 3, 0)
+chk("4.5 retrieval affected", poi["Retrieval_Affected"].astype(str).str.lower().eq("yes").sum(), CLAIMS["checks"]['4.5 retrieval affected'], 0)
 fb = llm[llm["Fallback_Triggered"].astype(str).str.lower() == "yes"]
 lat = fb["Fallback_Latency_ms"].astype(float)
-chk("4.5 fallback n", len(fb), 19, 0)
-chk("4.5 fallback mean", lat.mean(), 55.7, 0.05)
-chk("4.5 fallback median", lat.median(), 54.6, 0.05)
-chk("4.5 fallback P95", np.percentile(lat, 95), 81.6, 0.05)
-chk("4.5 crews completed", llm["Crew_Continued"].astype(str).str.lower().eq("yes").sum(), 30, 0)
+chk("4.5 fallback n", len(fb), CLAIMS["checks"]['4.5 fallback n'], 0)
+chk("4.5 fallback mean", lat.mean(), CLAIMS["checks"]['4.5 fallback mean'], 0.05)
+chk("4.5 fallback median", lat.median(), CLAIMS["checks"]['4.5 fallback median'], 0.05)
+chk("4.5 fallback P95", np.percentile(lat, 95), CLAIMS["checks"]['4.5 fallback P95'], 0.05)
+chk("4.5 crews completed", llm["Crew_Continued"].astype(str).str.lower().eq("yes").sum(), CLAIMS["checks"]['4.5 crews completed'], 0)
 tpf = ((fb["Prediction"] == "anomaly") & (fb["Ground_Truth"] == "anomaly")).sum()
 fpf = ((fb["Prediction"] == "anomaly") & (fb["Ground_Truth"] == "normal")).sum()
 fnf = ((fb["Prediction"] == "normal") & (fb["Ground_Truth"] == "anomaly")).sum()
-chk("4.5 fallback-only F1", 2 * tpf / (2 * tpf + fpf + fnf), 0.842)
+chk("4.5 fallback-only F1", 2 * tpf / (2 * tpf + fpf + fnf), CLAIMS["checks"]['4.5 fallback-only F1'])
 adam_e = egr[egr["System"].astype(str).str.contains("ADAM", case=False)]
 cloud_e = egr[~egr["System"].astype(str).str.contains("ADAM", case=False)]
-chk("4.5 ADAM windows", len(adam_e), 12, 0)
-chk("4.5 ADAM egress zero", (adam_e["Total_Bytes_External"] == 0).all(), 1, 0)
-chk("4.5 cloud windows", len(cloud_e), 8, 0)
-chk("4.5 cloud KB/window", (cloud_e["Total_Bytes_External"] / 1024).mean(), 117.4, 0.05)
-chk("4.5 cloud calls/window", cloud_e["External_API_Calls"].mean(), 19.1, 0.05)
+chk("4.5 ADAM windows", len(adam_e), CLAIMS["checks"]['4.5 ADAM windows'], 0)
+chk("4.5 ADAM egress zero", (adam_e["Total_Bytes_External"] == 0).all(), CLAIMS["checks"]['4.5 ADAM egress zero'], 0)
+chk("4.5 cloud windows", len(cloud_e), CLAIMS["checks"]['4.5 cloud windows'], 0)
+chk("4.5 cloud KB/window", (cloud_e["Total_Bytes_External"] / 1024).mean(), CLAIMS["checks"]['4.5 cloud KB/window'], 0.05)
+chk("4.5 cloud calls/window", cloud_e["External_API_Calls"].mean(), CLAIMS["checks"]['4.5 cloud calls/window'], 0.05)
 
 # ---------------------------------------------------------------- substitution + degraded families
 swap = pd.read_excel(xl, "17_Swap_Study_Summary", header=1)
-for agent, alone, crew in [
-    ("Static threshold", 0.790, 0.840),
-    ("LLM (Gemma 3 1B)", 0.855, 0.896),
-    ("Logistic regression", 0.9118, 0.9206),
-    ("Random forest", 0.9277, 0.9404),
-    ("Gradient boosting", 0.9310, 0.9502),
-]:
+for agent, alone, crew in CLAIMS["series"]["substitution_results"]:
     row = swap[swap["Decision_Agent"] == agent].iloc[0]
     chk(f"swap {agent} standalone F1", row["Standalone_F1"], alone, 0.0006)
     chk(f"swap {agent} in-crew F1", row["InCrew_F1"], crew, 0.0006)
 
 deg = pd.read_excel(xl, "14_Degraded_Conditions", header=1)
-for cond, want_llm, want_gbm in [
-    ("Clean", 0.895, 0.938),
-    ("One-Node Dropout", 0.905, 0.895),
-    ("Mild Drift", 0.895, 0.915),
-    ("Noise", 0.885, 0.905),
-    ("Strong Drift", 0.890, 0.830),
-]:
+for cond, want_llm, want_gbm in CLAIMS["series"]["degraded_results"]:
     llm_mean = deg[(deg.Condition == cond) & (deg.System == "ADAM_LLM")]["F1_Score"].mean()
     gbm_mean = deg[(deg.Condition == cond) & (deg.System == "ADAM_GBM")]["F1_Score"].mean()
     chk(f"degraded {cond} ADAM_LLM F1", llm_mean, want_llm, 0.0006)
     chk(f"degraded {cond} ADAM_GBM F1", gbm_mean, want_gbm, 0.0006)
 
-rev = pd.read_excel(xl, "18_Revised_Statistical_Tests", header=1)
-chk("stat family main size", (rev.Family == "Main benchmark").sum(), 10, 0)
-chk("stat family substitution size", (rev.Family == "Decision-Agent substitution").sum(), 5, 0)
-chk("stat family degraded size", (rev.Family == "Degraded conditions").sum(), 20, 0)
+swap_trials = pd.read_excel(xl, "15_Swap_Study_Trials", header=1)
+sub_stats = substitution_family(tr, swap_trials)
+deg_stats = degraded_family(deg)
+chk("stat family main size", len(main_stats), CLAIMS["checks"]['stat family main size'], 0)
+chk("stat family substitution size", len(sub_stats), CLAIMS["checks"]['stat family substitution size'], 0)
+chk("stat family degraded size", len(deg_stats), CLAIMS["checks"]['stat family degraded size'], 0)
+
+sub_by_name = {r.comparison: r for r in sub_stats}
+chk("swap Static p_Holm", sub_by_name["Static threshold"].p_holm, CLAIMS["checks"]['swap Static p_Holm'], 1e-12)
+chk("swap LLM p_Holm", sub_by_name["LLM (Gemma 3 1B)"].p_holm, CLAIMS["checks"]['swap LLM p_Holm'], 1e-12)
+for label in ("Logistic regression", "Random forest", "Gradient boosting"):
+    chk(f"swap {label} p_Holm", sub_by_name[label].p_holm, CLAIMS["checks"]["swap fitted p_Holm"], 1e-12)
+for row in deg_stats:
+    chk(f"degraded Holm {row.comparison}", row.p_holm, CLAIMS["checks"]["degraded Holm common"], 1e-12)
 
 print("Workbook-backed checks passed, including the 11-system benchmark, ")
 print("Decision-Agent substitution study, and degraded-condition family.")

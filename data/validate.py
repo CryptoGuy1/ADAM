@@ -6,12 +6,9 @@ Integrity checks that a D1 dataset must pass before any metric is computed.
 
 Why
 ---
-Table 5 reports Static Threshold at F1 = 0.790. That number is obtainable only
-if the ground-truth labels are **not** a deterministic function of the MQ-4
-reading crossing the screening threshold. If they are, the static-threshold
-baseline reduces to reproducing the labelling rule and scores F1 = 1.000, the
-Random Forest converges on the same boundary, and every reported margin over
-those baselines collapses.
+An evaluation set cannot test screening performance if its ground-truth labels
+are a deterministic function of the same MQ-4 threshold used by the screening
+rule. Such labels would make the threshold baseline perfect by construction.
 
 :func:`assert_labels_independent` is called
 by :func:`data.loader.load_trials` on every load and raises
@@ -27,9 +24,7 @@ The MQ-4 readings carry drift, noise, and cross-sensitivity; the reference does
 not. Disagreement between them is the phenomenon the paper is about. Concretely,
 a sound dataset shows:
 
-  * MQ-4 above threshold on some reference-negative events (drift-driven false
-    positives - the pooled 0.166 FAR of the static baseline, reported as the
-    0.165 per-trial mean in Table 5)
+  * MQ-4 above threshold on some reference-negative events
   * MQ-4 below threshold on some reference-positive events (missed detections)
   * agreement between threshold rule and label well below 100%
 """
@@ -170,9 +165,8 @@ def assert_labels_independent(
             f"(agreement {diag.threshold_agreement:.4f} >= {tolerance}).\n\n"
             f"{diag.summary()}\n\n"
             "Under these labels the Static Threshold baseline scores "
-            f"F1 = {diag.implied_static_f1:.3f}, not the 0.790 reported in "
-            "Table 5, and every margin over the rule- and tree-based baselines "
-            "is void.\n\n"
+            f"F1 = {diag.implied_static_f1:.3f} by construction. Such labels "
+            "cannot support a comparison with independent classifiers.\n\n"
             "Labels must come from the NDIR reference analyzer "
             "(Table 4), independently of the MQ-4 readings under evaluation. "
             "If this dataset was derived by thresholding the MQ-4 channel, it "
@@ -268,12 +262,8 @@ def diagnose_all_channels(
 ) -> Dict[str, LabelDiagnostics]:
     """Diagnose every sensor channel, not just the one the baseline uses.
 
-    The guard below rejects a dataset whose labels are recoverable from the
-    channel under evaluation. That check passes on the raw channel at 0.81
-    agreement, but the calibrated channel reaches 0.96 - close enough that a
-    fixed threshold on it scores F1 = 0.955, above the full system. A dataset
-    can therefore satisfy the guard on one channel while another channel it
-    contains is nearly the answer key.
+    A dataset can pass the guard on one channel while another channel is
+    nearly an answer key. Inspect each evaluated channel separately.
     """
     return {
         name: diagnose_labels(values, labels, threshold_ppm)

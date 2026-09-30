@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Figure 7 and Table 8 for Section 4.4, computed from the deposited workbook.
+"""Historical Figure 7 and archived scaling summary from the source workbook.
 
 Panel (a): hardware domain N = 1-4. Raw replicates, level means with SD,
 power-law fit, and the matched simulation runs as hollow validation markers.
 
-Panel (b): scale-out domain N = 4-16, same treatment, labeled as model-based.
+Panel (b): archived scale-out estimates N = 4-16. These are not outputs of the new stage-based generator.
 
 Panel (c): hardware stage decomposition against node count -- the measured
 account of where the latency growth originates.
 
-Table 8: fitted models and simulator validation with provenance.
+Original fitted models and archived matched-level comparison only; not strict LOO validation.
 Output at 600 dpi PNG plus vector PDF.
 """
 
@@ -52,7 +52,7 @@ RED = "#D55E00"
 PURPLE = "#CC79A7"
 INK = "#1a1a1a"
 
-WB = sys.argv[1] if len(sys.argv) > 1 else "data/ADAM_Dataset_Master.xlsx"
+WB = sys.argv[1] if len(sys.argv) > 1 else "data/ADAM_Dataset_Master_v14_reconciled.xlsx"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "figures"
 os.makedirs(OUT, exist_ok=True)
 
@@ -113,7 +113,7 @@ def domain_panel(ax, df, popt, r2raw, color, marker, label, sim_overlay=None):
                     color="none", markersize=8.5, markeredgecolor=INK,
                     markeredgewidth=1.3, capsize=4, linewidth=0,
                     elinewidth=1.1, ecolor=INK, zorder=4,
-                    label="Scale-out model (validation)")
+                    label="Archived model (matched levels)")
     ax.set_xticks(levels)
     ax.grid(linestyle=":", linewidth=0.7, alpha=0.6)
     ax.set_axisbelow(True)
@@ -134,7 +134,7 @@ ax1.text(0.965, 0.13, "+%.1f%% from $N{=}1$ to $N{=}4$" % grow_hw,
 ax1.text(-0.155, 1.04, "(a)", transform=ax1.transAxes, fontsize=19,
          fontweight="bold")
 
-g2 = domain_panel(ax2, so, pw_so, r2r_so, SKY, "s", "Scale-out model, $n=18$/level")
+g2 = domain_panel(ax2, so, pw_so, r2r_so, SKY, "s", "Archived model estimates, $n=18$/level")
 grow_so = 100 * (g2["mean"].loc[16] / g2["mean"].loc[4] - 1)
 ax2.set_xlabel("Effective nodes $N$ (scale-out model)", labelpad=9)
 ax2.set_ylabel("Decision latency (s)", labelpad=9)
@@ -178,7 +178,7 @@ fig.savefig(os.path.join(OUT, "figure7_scalability.pdf"))
 fig.savefig(os.path.join(OUT, "figure7_scalability.png"))
 plt.close(fig)
 
-# ---------------------------------------------------------------- Table 8
+# ---------------------------------------------------------------- Scalability table (current manuscript Table 10)
 table = rf"""\begin{{table}}[H]
 \centering
 \caption{{Node-scaling models and simulator validation. Load is fixed at the reference configuration throughout, so latency changes attribute to node count.}}
@@ -191,19 +191,19 @@ table = rf"""\begin{{table}}[H]
 \textbf{{Domain}} & \textbf{{Basis}} & $N$ & $n$ & $T_0$ (ms) & $\alpha$ & $\beta$ \\
 \midrule
 Hardware & Measured (Raspberry~Pi~5) & 1--4 & {n_hw} & {pw_hw[0]:,.0f} & {pw_hw[1]:.1f} & {pw_hw[2]:.3f} \\
-Scale-out & Validated software model & 4--16 & {n_so} & {pw_so[0]:,.0f} & {pw_so[1]:,.1f} & {pw_so[2]:.3f} \\
+Scale-out & Archived software estimates & 4--16 & {n_so} & {pw_so[0]:,.0f} & {pw_so[1]:,.1f} & {pw_so[2]:.3f} \\
 \midrule
-\multicolumn{{7}}{{@{{}}l}}{{Validation on matched levels ($N=1$--$4$, 18 replicates each): MAPE ${mape:.2f}\%$, mean bias ${bias:+.2f}\%$.}} \\
+\multicolumn{{7}}{{@{{}}l}}{{Archived matched-level comparison ($N=1$--$4$, 18 replicates each): MAPE ${mape:.2f}\%$, mean bias ${bias:+.2f}\%$.}} \\
 \bottomrule
 \end{{tabular}}
 \begin{{tablenotes}}[flushleft]
 \footnotesize
-\item Fits are $T(N)=T_0+\alpha N^{{\beta}}$ to level means. $R^2$ evaluated over the raw replicate observations is ${r2r_hw:.2f}$ (hardware) and ${r2r_so:.2f}$ (scale-out); evaluated over level means it is ${r2m_hw:.2f}$ and ${r2m_so:.2f}$, as recorded in the deposited fitted-models sheet, the difference being the within-level replicate variance that averaging removes. The scale-out results at $N>4$ are conditional on the validation above.
+\item Fits are $T(N)=T_0+\alpha N^{{\beta}}$ to level means. $R^2$ evaluated over the raw replicate observations is ${r2r_hw:.2f}$ (hardware) and ${r2r_so:.2f}$ (scale-out); evaluated over level means it is ${r2m_hw:.2f}$ and ${r2m_so:.2f}$, as recorded in the deposited fitted-models sheet, the difference being the within-level replicate variance that averaging removes. Archived scale-out estimates above four physical nodes remain unvalidated by additional physical hardware. The new strict leave-one-level-out stage-model validation is reported separately.
 \end{{tablenotes}}
 \end{{threeparttable}}
 \end{{table}}
 """
-with open(os.path.join(OUT, "table8_scalability.tex"), "w") as fh:
+with open(os.path.join(OUT, "table10_scalability.tex"), "w") as fh:
     fh.write(table)
 
 # ---------------------------------------------------------------- verify

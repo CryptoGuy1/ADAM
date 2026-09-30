@@ -299,12 +299,8 @@ class SimulationParams:
     #: Multiplicative measurement noise on each MQ-4 channel.
     sensor_noise_cv: float = 0.24
 
-    #: Cross-sensitivity excursions (humidity, VOCs) that lift MQ-4 without any
-    #: real methane present - the mechanism behind the static baseline pooled 0.166 FAR (0.165 as a per-trial mean).
-    #: These defaults place the fixture's static-threshold baseline near the
-    #: F1 = 0.790 / FAR = 0.165 (per-trial mean) operating point of Table 5, so the fixture
-    #: exercises the same discrimination problem. It remains a fixture: matching
-    #: the baseline's operating point is not reproducing the paper's results.
+    #: Cross-sensitivity excursions (humidity, VOCs) that lift MQ-4 without
+    #: a methane release. This parameter governs only simulated fixtures.
     interference_rate: float = 0.21
     interference_gain: float = 2.4
 

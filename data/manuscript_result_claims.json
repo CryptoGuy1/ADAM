@@ -1,0 +1,650 @@
+{
+  "description": "Manuscript result values and numerical expectations; verification code computes observed values from the supplied workbook.",
+  "checks": {
+    "4.1 ADAM F1 sd": 0.009,
+    "4.1 margin over Static (pts)": 0.106,
+    "4.1 SingleAgent gap (pts)": 0.041,
+    "4.1 variance min ppm2": 6073.2,
+    "4.1 variance max ppm2": 6609.6,
+    "4.1 norm weight min": 0.239,
+    "4.1 norm weight max": 0.26,
+    "4.1 Cloud median diff": 0.007,
+    "4.1 Cloud trials favoring cloud": 8,
+    "4.1 NoBlockchain effective n": 9,
+    "4.1 NoBlockchain favoring ADAM": 8,
+    "4.1 NoBlockchain median": 0.009,
+    "4.1 anomalies above gate": 707,
+    "4.1 anomalies below gate": 193,
+    "4.1 triggered events": 889,
+    "4.1 triggered FP static": 182,
+    "4.1 triggered FP derived deployment": 73,
+    "4.1 above-gate prediction identity (mismatches)": 0,
+    "4.1 below-gate all normal (exceptions)": 0,
+    "4.1 blockchain delta (ms)": 246,
+    "4.1 blockchain trials": 7,
+    "4.1 weaviate delta (ms)": 83,
+    "4.1 weaviate trials": 6,
+    "4.1 no-agg delta (ms)": 451,
+    "4.1 no-agg trials": 9,
+    "4.2 events": 459,
+    "4.2 completed": 446,
+    "4.2 failures": 13,
+    "4.2 formation mean": 2076,
+    "4.2 formation sd": 182,
+    "4.2 formation median": 2078,
+    "4.2 formation P95": 2373,
+    "4.2 per-day formation span (ms)": 9,
+    "4.2 per-day latency span (ms)": 80,
+    "4.2 publication mean (ms)": 472,
+    "4.2 publication sd (ms)": 267,
+    "4.2 publication median (ms)": 439,
+    "4.2 publication P95 (ms)": 1005,
+    "4.2 publication share of T_form (%)": 22.7,
+    "4.2 publication share of budget (%)": 2.5,
+    "3.4.3 coordination span (h)": 56.7,
+    "4.3 event rate (per h)": 8.1,
+    "4.2 decision mean (s)": 18.99,
+    "4.2 decision median (s)": 19.0,
+    "4.2 decision P95 (s)": 20.39,
+    "4.2 decision max (s)": 21.38,
+    "4.2 gov+bc share %": 3.9,
+    "4.2 end-to-end completion %": 97.2,
+    "4.2 all failures censored at 30 s": 13,
+    "4.3 sustained CPU %": 21.8,
+    "4.3 max CPU %": 97.7,
+    "4.3 LLM KB/min": 21.1,
+    "4.3 Weaviate KB/min": 13.8,
+    "4.3 Blockchain KB/min": 6.1,
+    "4.3 Full-NoLLM RAM (MB)": 1540,
+    "4.3 share of 8 GB %": 47.5,
+    "4.4 HW N=1 (s)": 17.64,
+    "4.4 HW N=4 (s)": 18.82,
+    "4.4 HW growth %": 6.7,
+    "4.4 SO N=4 (s)": 18.55,
+    "4.4 SO N=16 (s)": 20.94,
+    "4.4 SO growth %": 12.9,
+    "4.4 overall growth %": 18.7,
+    "4.4 margin at N=16 (s)": 9.1,
+    "4.4 MAPE %": 2.37,
+    "4.4 bias %": -0.02,
+    "4.4 worst level dev % (N=2)": 4.0,
+    "4.4 coordination growth (ms)": 594,
+    "4.4 reasoning growth (ms)": 584,
+    "4.5 injection detected": 27,
+    "4.5 attack F1": 0.769,
+    "4.5 attack FAR": 0.176,
+    "4.5 retrieval affected": 3,
+    "4.5 fallback n": 19,
+    "4.5 fallback mean": 55.7,
+    "4.5 fallback median": 54.6,
+    "4.5 fallback P95": 81.6,
+    "4.5 crews completed": 30,
+    "4.5 fallback-only F1": 0.842,
+    "4.5 ADAM windows": 12,
+    "4.5 ADAM egress zero": 1,
+    "4.5 cloud windows": 8,
+    "4.5 cloud KB/window": 117.4,
+    "4.5 cloud calls/window": 19.1,
+    "stat family main size": 10,
+    "stat family substitution size": 5,
+    "stat family degraded size": 20,
+    "swap Static p_Holm": 0.009765625,
+    "swap LLM p_Holm": 0.009765625,
+    "swap fitted p_Holm": 0.4921875,
+    "degraded Holm common": 0.0390625,
+    "degraded exact common": 0.001953125,
+    "main Holm nonsignificant count": 2,
+    "4.5 poisoning fisher p": 0.47,
+    "4.1 gated trigger rate": 0.4445,
+    "D1 event rows": 2000,
+    "sensor weight ratio": 1.088
+  },
+  "tables": {
+    "TABLE4": {
+      "ADAM_LLM": [
+        0.901,
+        0.891,
+        0.896,
+        0.08
+      ],
+      "Static_Threshold": [
+        0.795,
+        0.786,
+        0.79,
+        0.165
+      ],
+      "Random_Forest": [
+        0.86,
+        0.824,
+        0.841,
+        0.11
+      ],
+      "RandomForest_Fused": [
+        0.946,
+        0.912,
+        0.928,
+        0.044
+      ],
+      "GBM_Fused": [
+        0.951,
+        0.913,
+        0.931,
+        0.039
+      ],
+      "Cloud_Only": [
+        0.904,
+        0.899,
+        0.901,
+        0.078
+      ],
+      "SingleAgent": [
+        0.881,
+        0.83,
+        0.855,
+        0.092
+      ],
+      "ADAM_NoAgg": [
+        0.889,
+        0.851,
+        0.869,
+        0.087
+      ],
+      "ADAM_NoLLM": [
+        0.864,
+        0.817,
+        0.84,
+        0.105
+      ],
+      "ADAM_NoBlockchain": [
+        0.902,
+        0.877,
+        0.889,
+        0.078
+      ],
+      "ADAM_NoWeaviate": [
+        0.883,
+        0.853,
+        0.868,
+        0.093
+      ]
+    },
+    "WILCOXON": {
+      "ADAM_vs_Static": [
+        0.001953125,
+        0.01953125
+      ],
+      "ADAM_vs_RF_Raw": [
+        0.001953125,
+        0.01953125
+      ],
+      "ADAM_vs_RF_Fused": [
+        0.005859375,
+        0.01953125
+      ],
+      "ADAM_vs_GBM_Fused": [
+        0.001953125,
+        0.01953125
+      ],
+      "ADAM_vs_Cloud": [
+        0.048828125,
+        0.09765625
+      ],
+      "ADAM_vs_SingleAgent": [
+        0.001953125,
+        0.01953125
+      ],
+      "ADAM_vs_NoAgg": [
+        0.00390625,
+        0.01953125
+      ],
+      "ADAM_vs_NoLLM": [
+        0.001953125,
+        0.01953125
+      ],
+      "ADAM_vs_NoBlockchain": [
+        0.09765625,
+        0.09765625
+      ],
+      "ADAM_vs_NoWeaviate": [
+        0.00390625,
+        0.01953125
+      ]
+    },
+    "STAGES42": {
+      "T_reason_ms": [
+        15474,
+        81.5
+      ],
+      "T_form_ms": [
+        2076,
+        10.9
+      ],
+      "T_aggregate_ms": [
+        437,
+        2.3
+      ],
+      "T_validate_ms": [
+        308,
+        1.6
+      ],
+      "T_weaviate_ms": [
+        256,
+        1.3
+      ],
+      "T_blockchain_ms": [
+        439,
+        2.3
+      ]
+    },
+    "STATES": {
+      "crew_active": [
+        94.7,
+        3890,
+        41.0,
+        219
+      ],
+      "monitoring": [
+        28.0,
+        2349,
+        12.7,
+        434
+      ],
+      "idle": [
+        11.3,
+        1530,
+        3.0,
+        256
+      ]
+    },
+    "TABLE6": {
+      "ADAM_LLM": [
+        94.7,
+        3890,
+        163.9
+      ],
+      "Static_Threshold": [
+        14.5,
+        766,
+        26.5
+      ],
+      "Random_Forest": [
+        18.0,
+        800,
+        34.0
+      ],
+      "Cloud_Only": [
+        22.3,
+        1063,
+        228.0
+      ],
+      "SingleAgent": [
+        91.3,
+        3650,
+        133.0
+      ],
+      "ADAM_NoAgg": [
+        92.5,
+        3780,
+        205.0
+      ],
+      "ADAM_NoLLM": [
+        32.8,
+        2350,
+        87.3
+      ],
+      "ADAM_NoBlockchain": [
+        92.4,
+        3710,
+        140.0
+      ],
+      "ADAM_NoWeaviate": [
+        85.2,
+        3400,
+        112.0
+      ]
+    },
+    "BY_TYPE": {
+      "replay": [
+        7,
+        7
+      ],
+      "spike_inject": [
+        10,
+        11
+      ],
+      "zero_inject": [
+        8,
+        9
+      ],
+      "constant_offset": [
+        2,
+        3
+      ]
+    },
+    "FIT_PARAMS": {
+      "HW": [
+        17380,
+        198.8,
+        1.462
+      ],
+      "SO": [
+        14262,
+        2950.6,
+        0.288
+      ]
+    }
+  },
+  "series": {
+    "recall_by_system": [
+      [
+        "Static_Threshold",
+        1.0,
+        0.0,
+        0.786
+      ],
+      [
+        "ADAM_Derived",
+        0.976,
+        0.0,
+        0.767
+      ],
+      [
+        "ADAM_LLM",
+        0.976,
+        0.58,
+        0.891
+      ]
+    ],
+    "deployment_metrics": [
+      [
+        "Precision",
+        0.904,
+        0.011
+      ],
+      [
+        "Recall",
+        0.767,
+        0.028
+      ],
+      [
+        "F1",
+        0.83,
+        0.019
+      ],
+      [
+        "FAR",
+        0.066,
+        0.007
+      ]
+    ],
+    "latency_by_system": [
+      [
+        "Static_Threshold",
+        0.3
+      ],
+      [
+        "Random_Forest",
+        0.4
+      ],
+      [
+        "ADAM_NoLLM",
+        1.3
+      ],
+      [
+        "ADAM_LLM",
+        18.8
+      ],
+      [
+        "Cloud_Only",
+        12.9
+      ]
+    ],
+    "failure_codes": [
+      [
+        "FAIL_LLM_DEADLINE",
+        3
+      ],
+      [
+        "FAIL_BLOCKCHAIN_COMMIT",
+        3
+      ],
+      [
+        "FAIL_VALIDATION_REPAIR",
+        3
+      ],
+      [
+        "FAIL_CREW_QUORUM",
+        2
+      ],
+      [
+        "FAIL_WEAVIATE_TIMEOUT",
+        2
+      ]
+    ],
+    "poisoning_groups": [
+      [
+        0,
+        [
+          8,
+          8
+        ]
+      ],
+      [
+        5,
+        [
+          7,
+          8
+        ]
+      ],
+      [
+        10,
+        [
+          6,
+          7
+        ]
+      ],
+      [
+        20,
+        [
+          6,
+          7
+        ]
+      ]
+    ],
+    "substitution_results": [
+      [
+        "Static threshold",
+        0.79,
+        0.84
+      ],
+      [
+        "LLM (Gemma 3 1B)",
+        0.855,
+        0.896
+      ],
+      [
+        "Logistic regression",
+        0.9118,
+        0.9206
+      ],
+      [
+        "Random forest",
+        0.9277,
+        0.9404
+      ],
+      [
+        "Gradient boosting",
+        0.931,
+        0.9502
+      ]
+    ],
+    "degraded_results": [
+      [
+        "Clean",
+        0.895,
+        0.938
+      ],
+      [
+        "One-Node Dropout",
+        0.905,
+        0.895
+      ],
+      [
+        "Mild Drift",
+        0.895,
+        0.915
+      ],
+      [
+        "Noise",
+        0.885,
+        0.905
+      ],
+      [
+        "Strong Drift",
+        0.89,
+        0.83
+      ]
+    ]
+  },
+  "phase5": {
+    "injection.detected": {
+      "expected": 27,
+      "tolerance": 0
+    },
+    "injection.F1": {
+      "expected": 0.769,
+      "tolerance": 0.0006
+    },
+    "injection.FAR": {
+      "expected": 0.176,
+      "tolerance": 0.0006
+    },
+    "poisoning.clean_correct": {
+      "expected": 8,
+      "tolerance": 0
+    },
+    "poisoning.5_correct": {
+      "expected": 7,
+      "tolerance": 0
+    },
+    "poisoning.10_correct": {
+      "expected": 6,
+      "tolerance": 0
+    },
+    "poisoning.20_correct": {
+      "expected": 6,
+      "tolerance": 0
+    },
+    "poisoning.retrieval_affected": {
+      "expected": 3,
+      "tolerance": 0
+    },
+    "fallback.triggered": {
+      "expected": 19,
+      "tolerance": 0
+    },
+    "fallback.continued": {
+      "expected": 19,
+      "tolerance": 0
+    },
+    "fallback.mean_ms": {
+      "expected": 55.7,
+      "tolerance": 0.051
+    },
+    "fallback.median_ms": {
+      "expected": 54.6,
+      "tolerance": 0.051
+    },
+    "fallback.p95_ms": {
+      "expected": 81.6,
+      "tolerance": 0.051
+    },
+    "fallback.F1": {
+      "expected": 0.842,
+      "tolerance": 0.0006
+    },
+    "egress.local_mean_KB": {
+      "expected": 0,
+      "tolerance": 0
+    },
+    "egress.cloud_mean_KB": {
+      "expected": 117.4,
+      "tolerance": 0.051
+    },
+    "egress.cloud_calls_mean": {
+      "expected": 19.1,
+      "tolerance": 0.051
+    },
+    "resource.windows": {
+      "expected": 909,
+      "tolerance": 0
+    },
+    "resource.noninfer_cpu": {
+      "expected": 21.8,
+      "tolerance": 0.051
+    },
+    "resource.idle.CPU": {
+      "expected": 11.3,
+      "tolerance": 0.051
+    },
+    "resource.idle.memory": {
+      "expected": 1530,
+      "tolerance": 1.0
+    },
+    "resource.idle.accounted_KB_per_60s": {
+      "expected": 3.0,
+      "tolerance": 0.051
+    },
+    "resource.monitoring.CPU": {
+      "expected": 28,
+      "tolerance": 0.051
+    },
+    "resource.monitoring.memory": {
+      "expected": 2349,
+      "tolerance": 1.0
+    },
+    "resource.monitoring.accounted_KB_per_60s": {
+      "expected": 12.7,
+      "tolerance": 0.051
+    },
+    "resource.crew_active.CPU": {
+      "expected": 94.7,
+      "tolerance": 0.051
+    },
+    "resource.crew_active.memory": {
+      "expected": 3890,
+      "tolerance": 1.0
+    },
+    "resource.crew_active.accounted_KB_per_60s": {
+      "expected": 41.0,
+      "tolerance": 0.051
+    }
+  },
+  "cohorts": {
+    "injection_total": 30,
+    "attack_patterns": {
+      "replay": 7,
+      "spike_inject": 11,
+      "zero_inject": 9,
+      "constant_offset": 3
+    },
+    "poisoning_total": 30,
+    "poisoning_levels": {
+      "0": 8,
+      "5": 8,
+      "10": 7,
+      "20": 7
+    },
+    "failure_total": 30,
+    "fallback_triggered": 19,
+    "egress_windows": {
+      "ADAM_LLM": 12,
+      "Cloud-Only": 8
+    },
+    "resource_states": {
+      "idle": 256,
+      "monitoring": 434,
+      "crew_active": 219
+    }
+  }
+}

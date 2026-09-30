@@ -45,7 +45,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-HARNESS_VERSION = "1.1"
+HARNESS_VERSION = "1.2"
 DROPOUT_NODE = "N4"
 
 CONDITIONS = {
@@ -60,7 +60,7 @@ CONDITIONS = {
     },
     "noise": {
         "noise": {"gaussian_sigma_frac": 0.60, "impulse_rate": 0.03,
-                  "impulse_sigma": 6.0, "independent_per_node": True}
+                  "impulse_sigma": 3.6, "independent_per_node": True}
     },
     "one_node_dropout": {
         "dropout": {"node": DROPOUT_NODE, "onset_frac": 0.33,
@@ -147,10 +147,11 @@ def apply_condition(df, condition, trial, rng, sigma):
 
     if "noise" in spec:
         s = spec["noise"]
-        sig = np.array([sigma[nid] for nid in out["node_id"]]) * s["gaussian_sigma_frac"]
+        node_sig = np.array([sigma[nid] for nid in out["node_id"]])
+        sig = node_sig * s["gaussian_sigma_frac"]
         out["perturbed_ppm"] = out["perturbed_ppm"] + rng.normal(0.0, 1.0, n) * sig
         hit = rng.random(n) < s["impulse_rate"]
-        spike = rng.choice([-1.0, 1.0], n) * s["impulse_sigma"] * sig
+        spike = rng.choice([-1.0, 1.0], n) * s["impulse_sigma"] * node_sig
         out.loc[hit, "perturbed_ppm"] = out.loc[hit, "perturbed_ppm"] + spike[hit]
 
     if "dropout" in spec:
@@ -177,11 +178,14 @@ def stream_digest(out):
 def run(df, outdir):
     validate_input(df)
     os.makedirs(outdir, exist_ok=True)
-    sigma = _node_sigma(df)
     manifest, frames = [], []
 
     for condition in CONDITIONS:
         for trial, g in df.groupby("trial"):
+            # Manuscript: sigma_i is measured within the clean trial, per node.
+            sigma = _node_sigma(g)
+            if not all(np.isfinite(v) and v > 0 for v in sigma.values()):
+                raise ValueError(f"trial {trial}: per-node sigma must be finite and positive")
             seed_int, seed_hex = condition_seed(condition, trial)
             rng = np.random.default_rng(seed_int)
             out = apply_condition(g, condition, trial, rng, sigma)

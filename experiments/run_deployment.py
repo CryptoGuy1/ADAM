@@ -7,31 +7,26 @@ The 72-hour continuous deployment (D2) and the concurrency sweep of Section 4.4.
 Two harnesses share this module because they measure the same thing under
 different load:
 
-    run_deployment   continuous monitoring, one event at a time  -> Figure 5, Table 6
-    run_scalability  node-count scaling under fixed load         -> Table 7, Figure 7
+    run_deployment   continuous monitoring, one event at a time  -> deployment latency/resource records
+    run_scalability  node-count scaling under fixed load         -> archived scaling analysis
 
 What D2 produces
 ----------------
-459 EventTrace records with six per-stage latencies each (Equation 6), resource
-counters, and completeness flags. Section 4.2's figures are readouts of these:
-mean 18.99 s end-to-end, 81.5% in reasoning, and 97.2% end-to-end completion.
+EventTrace records with six per-stage latencies each, resource counters, and
+completion flags. This runner reports the events it actually processes.
 
 On the scalability design
 -------------------------
-The scalability study varies the number of participating nodes N while holding
-load fixed at the reference configuration (4 concurrent events, 8 sensor
-streams, 30,000 vectors), so latency changes attribute to node count. N = 1-4
-runs on physical Raspberry Pi 5 hardware; N = 6, 8, 12 and 16 come from a
-Python scale-out model validated against the matched N = 1-4 hardware runs
-(decision-latency MAPE 2.4%). Table 7 fits T(N) = T0 + alpha * N^beta to each
-domain. This harness reproduces the in-process analogue of that design: each
-event carries N sensor streams, so fusion, corroboration and vote collection
-grow with N while the reasoning stage stays per-event.
+The in-process scalability runner sequentially executes software events in its
+current environment. It is not the Pi hardware acquisition or the separate
+fixed-load stage-based model. Its synthetic extra sensor readings and timings
+must not be reported as Pi measurements or as the manuscript's archived
+software scale-out records.
 
 Usage
 -----
     python -m experiments.run_deployment --data data/artifacts/d1_simulated.csv \
-        --events 459 --out results/deployment/
+        --out results/deployment/
     python -m experiments.run_deployment --data data/artifacts/d1_simulated.csv \
         --scalability --node-counts 1 2 3 4 6 8 12 16
 """
@@ -51,10 +46,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from adam.config import (
     ADAMConfig,
     DEPLOYMENT_HOURS,
-    N_DEPLOYMENT_EVENTS,
-    NODE_SCALING_FIT_HW,
-    NODE_SCALING_FIT_SCALEOUT,
-    REFERENCE_STAGE_LATENCY_MS,
     SEED,
     DECISION_DEADLINE_S,
 )
@@ -78,7 +69,7 @@ logger = logging.getLogger(__name__)
 def run_deployment(
     dataset: Dataset,
     config: ADAMConfig,
-    n_events: int = N_DEPLOYMENT_EVENTS,
+    n_events: Optional[int] = None,
     llm_client: Optional[Any] = None,
     sample_resources: bool = True,
     seed: int = SEED,
@@ -105,6 +96,10 @@ def run_deployment(
     ]
     if not triggering:
         raise RuntimeError("no triggering events in the dataset")
+    if n_events is None:
+        n_events = len(triggering)
+    if n_events < 1:
+        raise ValueError("n_events must be positive")
 
     cpu_monitor = SustainedCPUMonitor()
     if sample_resources:
@@ -143,7 +138,7 @@ def summarize_deployment(
     traces: Sequence[EventTrace],
     deadline_s: float = DECISION_DEADLINE_S,
 ) -> Dict[str, Any]:
-    """Figure 5 and Table 6 quantities, computed from the traces."""
+    """Deployment latency/resource quantities computed from event traces."""
     if not traces:
         return {}
 
@@ -165,7 +160,6 @@ def summarize_deployment(
             "sd_ms": statistics.stdev(vals) if len(vals) > 1 else 0.0,
             "median_ms": statistics.median(vals),
             "share": statistics.fmean(vals) / total_mean if total_mean else 0.0,
-            "reference_mean_ms": REFERENCE_STAGE_LATENCY_MS.get(s),
         }
 
     complete = sum(1 for t in traces if t.is_complete())
@@ -173,8 +167,8 @@ def summarize_deployment(
     degraded = sum(1 for t in traces if t.degraded_mode)
     executed = sum(1 for t in traces if t.executed)
     # Per-store commit outcomes are reported separately for new/reference runs.
-    # The historical 2025 traces do not preserve independent acknowledgments
-    # for both stores, so their 446/459 denominator is completion only.
+    # A completion count does not itself establish independent acknowledgments
+    # from both stores.
     chain_ok = sum(1 for t in traces if t.persisted_chain)
     weaviate_ok = sum(1 for t in traces if t.persisted_weaviate)
     required = sorted({s for t in traces for s in t.required_stores})
@@ -218,7 +212,7 @@ def summarize_deployment(
 def fit_power_law(
     node_counts: Sequence[int], latency_ms: Sequence[float]
 ) -> Dict[str, float]:
-    """Fit T(N) = T0 + alpha * N^beta by least squares. Table 7.
+    """Fit T(N) = T0 + alpha * N^beta by least squares (archived analysis).
 
     Falls back to a two-parameter fit on log-transformed data when scipy is
     unavailable, which is adequate for reporting beta.
@@ -233,7 +227,7 @@ def fit_power_law(
         def model(N, alpha, beta, T0):
             return alpha * np.power(N, beta) + T0
 
-        p0 = [NODE_SCALING_FIT_HW["alpha"], 1.0, min(ys)]
+        p0 = [max(1.0, max(ys) - min(ys)), 1.0, min(ys)]
         popt, pcov = curve_fit(
             model, np.array(xs), np.array(ys), p0=p0, maxfev=20000
         )
@@ -308,7 +302,7 @@ def run_scalability(
             node.sensor.observe(e.primary)
 
     def widen(readings: Sequence[SensorReading], n: int) -> List[SensorReading]:
-        """Extend an event to n sensor streams by perturbed replication."""
+        """Extend an event to n synthetic streams for a software-only diagnostic."""
         base = list(readings)
         out: List[SensorReading] = []
         for i in range(n):
@@ -369,25 +363,17 @@ def run_scalability(
     if rows and rows[-1]["mean_ms"] < 1000:
         warnings.append(
             f"per-event latency at N={rows[-1]['node_count']} is "
-            f"{rows[-1]['mean_ms']:.1f} ms, orders below the ~19 s the "
-            f"deployment measures. Inference is not running; this sweep does "
-            f"not characterize the deployed system."
+            f"{rows[-1]['mean_ms']:.1f} ms, below the one-second diagnostic "
+            f"threshold. Check whether inference actually ran before "
+            f"interpreting this sweep."
         )
 
     return {
         "measurements": rows,
         "fit": fit,
-        "reference_fit_hardware": NODE_SCALING_FIT_HW,
-        "reference_fit_scaleout": NODE_SCALING_FIT_SCALEOUT,
         "fit_warnings": warnings,
         "fit_usable": not warnings,
-        "interpretation": (
-            "On the deposited testbed the hardware exponent over N = 1-4 is "
-            "about 1.46 and the scale-out curve over N = 4-16 flattens to an "
-            "exponent of about 0.29: coordination work grows with node count "
-            "while the per-event reasoning stage dominates the budget "
-            "(Section 4.4)."
-        ),
+        "interpretation": "Software-only in-process timing for this run and environment.",
     }
 
 
@@ -401,12 +387,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="D2 deployment and scalability harnesses")
     ap.add_argument("--data", required=True)
     ap.add_argument("--out", default="results/deployment")
-    ap.add_argument("--events", type=int, default=N_DEPLOYMENT_EVENTS)
+    ap.add_argument("--events", type=int, default=None,
+                    help="number of events to replay (default: all triggering input events)")
     ap.add_argument("--scalability", action="store_true")
     ap.add_argument(
         "--node-counts", type=int, nargs="+",
         default=[1, 2, 3, 4, 6, 8, 12, 16],
-        help="participating node counts to sweep under the fixed reference load",
+        help="synthetic stream counts for this in-process diagnostic sweep",
     )
     ap.add_argument("--events-per-run", type=int, default=4)
     ap.add_argument("--repeats", type=int, default=5)
@@ -454,11 +441,6 @@ def main() -> int:
             f"T(N) = {fit['T0']:.1f} + {fit['alpha']:.1f} * N^{fit['beta']:.3f} ms"
             f"   R^2 = {fit.get('r_squared', float('nan')):.4f}"
         )
-        hw, so = NODE_SCALING_FIT_HW, NODE_SCALING_FIT_SCALEOUT
-        print(f"deposited fits (Table 7): hardware N=1-4  T0={hw['T0']}, "
-              f"alpha={hw['alpha']}, beta={hw['beta']}")
-        print(f"                          scale-out N=4-16 T0={so['T0']}, "
-              f"alpha={so['alpha']}, beta={so['beta']}")
         print(f"\n{result['interpretation']}")
         out = os.path.join(args.out, "scalability.json")
         with open(out, "w") as fh:
@@ -482,15 +464,11 @@ def main() -> int:
     e2e = summary["end_to_end_ms"]
     print(
         f"end-to-end: mean {e2e['mean']/1000:.2f} s  median {e2e['median']/1000:.2f} s"
-        f"  p95 {e2e['p95']/1000:.2f} s   (manuscript: 18.9 s mean)"
+        f"  p95 {e2e['p95']/1000:.2f} s"
     )
-    print(f"{'stage':<10}{'mean ms':>12}{'share':>10}{'paper ms':>12}")
+    print(f"{'stage':<10}{'mean ms':>12}{'share':>10}")
     for s, d in summary["stages"].items():
-        ref = d["reference_mean_ms"]
-        print(
-            f"{s:<10}{d['mean_ms']:>12.1f}{d['share']:>9.1%}"
-            f"{(f'{ref:.0f}' if ref else '--'):>12}"
-        )
+        print(f"{s:<10}{d['mean_ms']:>12.1f}{d['share']:>9.1%}")
     print(
         f"\nreference-run explicit trace commits "
         f"{summary['explicit_trace_commit_fraction']:.1%}   "

@@ -7,11 +7,9 @@ Section 4.5.2 specify:
 
     model call -> parse -> [one format-repair retry] -> deterministic fallback
 
-The fallback is the availability mechanism behind Section 4.5.2. In the
-reported stress test, deterministic fallback activated for all 19 induced local-
-model failures; 16 of those 19 final classifications matched the reference
-labels (F1 = 0.842). ``degraded_mode`` is written into the trace so full-
-reasoning and fallback decisions remain distinguishable in the audit record.
+The fallback is the availability mechanism behind Section 4.5.2.
+``degraded_mode`` is written into the trace so full-reasoning and fallback
+decisions remain distinguishable in the audit record.
 
 Confidentiality note
 --------------------
@@ -174,9 +172,8 @@ def deterministic_fallback(
 ) -> DecisionObject:
     """Threshold-only classification used when reasoning is unavailable.
 
-    In the reported induced-failure arm, 16 of 19 fallback classifications
-    matched the reference labels (F1 = 0.842). The objective is availability
-    with an explicit degraded trace, not parity with full semantic reasoning.
+    The objective is availability with an explicit degraded trace, not parity
+    with full semantic reasoning.
 
     Severity is mapped to the documented prototype governance bands: events
     below the warning threshold are LOW, warning-band events are HIGH, and
