@@ -36,8 +36,8 @@ Three evidence categories must be kept distinct.
    recomputes the quantities the workbook supports, including the 11-system D1
    benchmark, the Decision-Agent substitution study, the degraded-condition
    trial summaries, deployment/resource/security quantities, and all three
-   multiplicity families. The current numbered data-driven figures are generated
-   directly from the same workbook. Deployment semantics are derived from the
+   multiplicity families. The numbered data-driven figures use the workbook, except Figure 7,
+   which uses stage-model outputs calibrated on the workbook hardware records. Deployment semantics are derived from the
    frozen benchmark predictions rather than by rerunning the language model.
 
 3. **New/reference reruns.** Re-executing fusion-dependent experiments from raw
@@ -454,43 +454,46 @@ Code: MIT (`LICENSE`).
 Deposited data: CC BY 4.0 (`LICENSE-DATA`).
 
 
-## Phase 3: separately identified six-stage scale-out reconstruction
+## Current Figure 7: hardware-calibrated six-stage scale-out model
 
-The historical `scripts/figure7_scalability.py` and workbook `08_Scalability_Log`
-continue to reproduce **archived** model estimates and their matched-level
-2.373% MAPE. That number is **not** the validation error of the new model.
-
-The new model uses only the 72 physically measured records exported from the
-reconciled V14 workbook as `data/scalability_hardware_v14.csv`. Its adjacent
-`.manifest.json` identifies the source workbook and source-file SHA-256. The
-source workbook remains unchanged. Run:
+The revised Figure 7 uses the stage model implemented in
+`experiments/scalability_stage_model.py`. Calibration uses the 72 measured
+Raspberry Pi records in `data/scalability_hardware_v14.csv`; its adjacent
+manifest identifies the source workbook and input checksum. The physical
+measurements remain unchanged.
 
 ```bash
-python -m experiments.scalability_stage_model \
-  --hardware data/scalability_hardware_v14.csv \
-  --out results/phase3
-python scripts/plot_reference_stage_scalability.py \
-  --hardware data/scalability_hardware_v14.csv \
-  --level-means results/phase3/stage_scaleout_level_means.csv \
-  --out results/phase3
+make scalability-figure7
+make verify-manuscript
 ```
 
-The generator produces `strict_lolo_validation.csv`,
-`stage_scaleout_reference_model.csv`, `stage_scaleout_level_means.csv`,
-`scalability_manifest.json` with output digests, and two **preview** charts.
-It withholds one physical node level from all calibration and anchor operations
-when calculating strict leave-one-level-out error. It then resamples complete
-stage vectors, derives nonnegative coordination-stage OLS slopes from physical
-levels 1--4, and estimates N=4,6,8,12,16 under a fixed four-event batch,
-eight logical sensor streams, four logical workers, and 30,000 vectors.
-Reasoning, query, and blockchain stages use the four-node reference distribution
-rather than an invented increase in inference/ledger capacity. Source code and
-limitations are documented in `docs/RECONSTRUCTION_PHASE3.md`.
+`make scalability-figure7` generates the strict leave-one-level-out validation,
+90 software replicates, five level summaries, and a manifest under
+`data/scalability_stage_model/`. It then writes the current three-panel Figure 7,
+its numerical summary, and the scalability table under `figures/`.
+`make deposit-figures` uses this same target for Figure 7.
 
-**Do not overwrite the historical scale-out sheets/figures with these outputs**
-without revising Methods, Results, the associated captions/table, and the
-archived-versus-reconstructed provenance distinction together. The model is a
-conditional software estimate; it is not a physical measurement at N>4.
+Model settings are seed 42, 18 replicates per level, a fixed four-event batch,
+eight logical sensor streams, four reasoning workers, and 30,000 database
+vectors. Non-negative coordination-stage slopes are fitted to resampled physical
+levels 1–4. Each replicate shares a full four-node stage vector across logical
+node levels; reasoning, retrieval, and blockchain stages retain that vector's
+measured service values. Strict validation excludes each held-out node level
+from coefficient and anchor estimation.
+
+The current result claims are stored in `data/manuscript_result_claims.json`,
+separately from the model code. `scripts/verify_manuscript_numbers.py` recomputes
+the stage model and checks the rounded manuscript values against those claims.
+The plotter checks input/output hashes and stage additivity before plotting.
+Outputs above four nodes are conditional software estimates, not additional
+physical device measurements.
+
+The older `scripts/figure7_scalability.py` reproduces the workbook's previous
+software series. It is retained for archive comparison and is no longer used
+by the current Figure 7 target. The original workbook and its earlier fit
+parameters are preserved; prior software claims are separately identified in
+the claims JSON. The new outputs must accompany the revised manuscript in the
+code/data release.
 
 ## Phase 4: new degraded-condition execution (not historical reproduction)
 
