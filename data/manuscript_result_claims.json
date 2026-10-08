@@ -77,7 +77,7 @@
     "4.5 cloud windows": 8,
     "4.5 cloud KB/window": 117.4,
     "4.5 cloud calls/window": 19.1,
-    "stat family main size": 10,
+    "stat family main size": 9,
     "stat family substitution size": 5,
     "stat family degraded size": 20,
     "swap Static p_Holm": 0.009765625,
@@ -85,7 +85,7 @@
     "swap fitted p_Holm": 0.4921875,
     "degraded Holm common": 0.0390625,
     "degraded exact common": 0.001953125,
-    "main Holm nonsignificant count": 2,
+    "main Holm nonsignificant count": 0,
     "4.5 poisoning fisher p": 0.47,
     "4.1 gated trigger rate": 0.4445,
     "D1 event rows": 2000,
@@ -163,43 +163,39 @@
     "WILCOXON": {
       "ADAM_vs_Static": [
         0.001953125,
-        0.01953125
+        0.017578125
       ],
       "ADAM_vs_RF_Raw": [
         0.001953125,
-        0.01953125
+        0.017578125
       ],
       "ADAM_vs_RF_Fused": [
         0.005859375,
-        0.01953125
+        0.017578125
       ],
       "ADAM_vs_GBM_Fused": [
         0.001953125,
-        0.01953125
+        0.017578125
       ],
       "ADAM_vs_Cloud": [
         0.048828125,
-        0.09765625
+        0.048828125
       ],
       "ADAM_vs_SingleAgent": [
         0.001953125,
-        0.01953125
+        0.017578125
       ],
       "ADAM_vs_NoAgg": [
         0.00390625,
-        0.01953125
+        0.017578125
       ],
       "ADAM_vs_NoLLM": [
         0.001953125,
-        0.01953125
-      ],
-      "ADAM_vs_NoBlockchain": [
-        0.09765625,
-        0.09765625
+        0.017578125
       ],
       "ADAM_vs_NoWeaviate": [
         0.00390625,
-        0.01953125
+        0.017578125
       ]
     },
     "STAGES42": {
@@ -686,5 +682,12 @@
       "largest_absolute_error_node": 3
     },
     "growth_pct": 10.8
+  },
+  "archived_classification_ablation": {
+    "description": "ADAM-No-Blockchain historical classification comparison retained for provenance only; excluded from the current manuscript classification family because governance and ledger functions occur after classification resolution.",
+    "ADAM_vs_NoBlockchain": [
+      0.09765625,
+      0.09765625
+    ]
   }
 }

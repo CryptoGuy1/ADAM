@@ -65,27 +65,30 @@ class FusionResult:
 
 
 def max_detectable_z(n_nodes: int) -> float:
-    """Largest weighted z-score any single node can attain in a crew of n.
+    """Equal-weight reference limit for one extreme node in a crew of ``n``.
 
-    The dispersion in :func:`fuse_readings` is computed over the same set that
-    contains the outlier, so an extreme reading inflates the denominator it is
-    measured against. For n equally weighted nodes with one arbitrarily large
-    deviation, the outlier's z-score converges to sqrt(n - 1) from below:
-
-        n = 3  ->  1.414
-        n = 4  ->  1.732
-        n = 5  ->  2.000
-        n = 8  ->  2.646
-
-    Consequence: on the four-node testbed, an ``outlier_z`` of 2.0 or above can
-    never fire, and the cross-node corroboration defense of Section 4.5.1 is
-    silently disabled. The deployed value of 1.5 sits below the 1.732 ceiling
-    with little margin, which is why :func:`fuse_readings` warns when the
-    configured threshold approaches it.
+    For equal normalized weights p=1/n, the standardized deviation of one
+    arbitrarily extreme observation approaches sqrt(n-1). Actual ADAM fusion
+    uses unequal inverse-variance weights, so :func:`single_node_z_limit` is the
+    operative limit used by :func:`fuse_readings`.
     """
     if n_nodes < 2:
         return 0.0
     return math.sqrt(n_nodes - 1)
+
+
+def single_node_z_limit(weight: float, total_weight: float) -> float:
+    """Attainable z-limit for one extreme observation under weighted fusion.
+
+    If p = weight / total_weight is the node's normalized fusion weight, the
+    limit is sqrt((1-p)/p). For the manuscript weights
+    (0.254, 0.239, 0.247, 0.260), the four limits are approximately
+    1.71, 1.78, 1.75, and 1.69, respectively.
+    """
+    if weight <= 0 or total_weight <= 0 or weight >= total_weight:
+        raise ValueError("weight must be positive and smaller than total_weight")
+    p = weight / total_weight
+    return math.sqrt((1.0 - p) / p)
 
 
 def fuse_readings(
@@ -113,41 +116,54 @@ def fuse_readings(
         the reading from the estimate - the Aggregator reports, the Coordinator
         and Decision agents act.
 
-        Must sit below :func:`max_detectable_z` for the crew size or no node
-        can ever be flagged; a threshold at or above the ceiling raises.
+        Detection reach depends on the normalized fusion weights. A warning is
+        emitted when the threshold is above the limit of any contributing node;
+        an error is raised only when it is at or above every node's limit.
 
     Raises
     ------
     ValueError
         If no readings are supplied, the weights sum to zero, or ``outlier_z``
-        exceeds the ceiling for this crew size.
+        is so high that no contributing node can ever be flagged.
     """
     if not readings:
         raise ValueError("Equation (2) is undefined over an empty node set")
-
-    if outlier_z is not None and len(readings) >= 3:
-        ceiling = max_detectable_z(len(readings))
-        if outlier_z >= ceiling:
-            raise ValueError(
-                f"outlier_z={outlier_z} is at or above the maximum attainable "
-                f"weighted z-score for {len(readings)} nodes ({ceiling:.3f}). "
-                f"No node could ever be flagged, silently disabling the "
-                f"cross-node corroboration defense of Section 4.5.1. Use a "
-                f"threshold below {ceiling:.3f}, or add nodes."
-            )
-        if outlier_z > 0.9 * ceiling:
-            logger.warning(
-                "outlier_z=%.2f is within 10%% of the %.3f ceiling for %d "
-                "nodes; detection sensitivity will be poor",
-                outlier_z,
-                ceiling,
-                len(readings),
-            )
 
     weights = {r.node_id: r.weight for r in readings}
     total_w = sum(weights.values())
     if total_w <= 0:
         raise ValueError("fusion weights sum to zero; check calibration variances")
+
+    if outlier_z is not None and len(readings) >= 3:
+        limits = {
+            node_id: single_node_z_limit(weight, total_w)
+            for node_id, weight in weights.items()
+        }
+        limiting_node = min(limits, key=limits.get)
+        smallest = limits[limiting_node]
+        largest = max(limits.values())
+        if outlier_z >= largest:
+            raise ValueError(
+                f"outlier_z={outlier_z} is at or above every attainable "
+                f"single-node weighted z-limit (largest={largest:.3f}). "
+                "No contributing node could ever be flagged."
+            )
+        if outlier_z >= smallest:
+            logger.warning(
+                "outlier_z=%.2f exceeds the weighted single-node limit %.3f "
+                "for %s; that node cannot be flagged at this threshold",
+                outlier_z,
+                smallest,
+                limiting_node,
+            )
+        elif outlier_z > 0.9 * smallest:
+            logger.warning(
+                "outlier_z=%.2f is within 10%% of the smallest weighted limit "
+                "%.3f (%s); detection sensitivity will be poor",
+                outlier_z,
+                smallest,
+                limiting_node,
+            )
 
     fused = sum(w * r.methane_ppm for w, r in zip(weights.values(), readings)) / total_w
 
@@ -233,6 +249,7 @@ __all__ = [
     "trigger",
     "fuse_readings",
     "max_detectable_z",
+    "single_node_z_limit",
     "FusionResult",
     "quorum_satisfied",
     "Candidate",

@@ -156,6 +156,24 @@ Using the deposited frozen benchmark predictions, this derivation reproduces the
 current manuscript operating point of approximately precision 0.904, recall
 0.767, F1 0.830, and FAR 0.066.
 
+## MQ-4 acquisition conversion
+
+The reference acquisition utility in `adam/sensing.py` follows the same
+manufacturer-curve method used in the companion TRACC prototype: ADS1115 code
+is converted to voltage, sensor resistance is computed from the divider, and
+CH4 concentration is estimated from the MQ-4 `Rs/R0` methane-sensitivity curve.
+For ADAM, the documented load resistance is **20 kOhm**. The curve coefficients
+are `1012.7` and `-2.786`, and `R0` is configurable (default 4.4 kOhm) rather
+than inferred from the NDIR reference. The NDIR channel remains an independent
+reference for labels and residual-based fusion calibration.
+
+## Classification and governance ablations
+
+The main classification multiplicity family contains nine comparators.
+`ADAM_NoBlockchain` remains available for operational/resource comparisons, but
+is excluded from classification significance testing because policy validation
+and ledger recording occur after crew classification resolution.
+
 ## Fusion calibration
 
 The reported D1 benchmark uses the fixed inverse-variance sensor weights preserved
@@ -454,6 +472,14 @@ Code: MIT (`LICENSE`).
 Deposited data: CC BY 4.0 (`LICENSE-DATA`).
 
 
+## Deployment resource-window accounting
+
+The D2 resource log contains 909 retained node-level 60-s windows (about 15.2
+aggregate node-hours) distributed between the first and last resource timestamps
+over a 58.4-h span. The span is not continuous four-node coverage, and state
+proportions from those windows must not be interpreted as a deployment-wide
+duty cycle.
+
 ## Current Figure 7: hardware-calibrated six-stage scale-out model
 
 The revised Figure 7 uses the stage model implemented in
@@ -545,7 +571,7 @@ make stats
 ```
 
 The resulting families contain 10 main benchmark comparisons, 5 Decision-Agent
-substitution comparisons, and 20 degraded-condition comparisons. Exact
+classification comparisons, 5 substitution comparisons, and 20 degraded-condition comparisons. Exact
 Wilcoxon tests (after zero-pair removal), 10,000 paired bootstrap resamples, and
 within-family Holm adjustments reproduce the current manuscript values after
 rounding. The historical workbook sheet is left unchanged for provenance.
@@ -557,7 +583,7 @@ make release-audit
 ```
 
 It runs the current test suite, verifies workbook-backed manuscript quantities,
-exports all 35 revised comparisons, executes the V14 security/resource source
+exports all 34 reported comparisons, executes the V14 security/resource source
 audit, and regenerates the source-linked Figure 8 and Figure 10 candidates. A
 passing local gate does not publish GitHub or Zenodo and does not imply that
 missing historical raw streams, ballots, per-store acknowledgments, or runtime

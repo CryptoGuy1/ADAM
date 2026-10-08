@@ -155,6 +155,18 @@ N_NODES: int = 4
 #: MQ-4 sensing range, ppm. Table 4.
 MQ4_RANGE_PPM: Tuple[float, float] = (300.0, 10_000.0)
 
+#: MQ-4 divider and manufacturer-curve parameters used by the reference
+#: acquisition conversion. ADAM documents a 20-kOhm load resistor; the curve
+#: coefficients mirror the manufacturer-curve implementation used by the
+#: companion TRACC prototype. R0 remains deployment-configurable.
+MQ4_LOAD_RESISTANCE_KOHM: float = float(os.getenv("ADAM_MQ4_RL_KOHM", "20.0"))
+MQ4_R0_KOHM: float = float(os.getenv("ADAM_MQ4_R0_KOHM", "4.4"))
+MQ4_CURVE_A: float = 1012.7
+MQ4_CURVE_B: float = -2.786
+ADS1115_FULL_SCALE_V: float = 4.096
+ADS1115_MAX_CODE: int = 32767
+MQ4_SENSOR_VOLTAGE_V: float = 5.0
+
 #: Sensor sampling rate, Hz. Table 4.
 SAMPLING_RATE_HZ: float = 1.0
 

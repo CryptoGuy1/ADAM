@@ -1,6 +1,6 @@
 """Recompute the three exploratory paired-comparison families in MDPI-15.
 
-The V14 workbook retains the per-trial outcomes needed for all 35 comparisons,
+The V14 workbook retains the per-trial outcomes needed for all 34 reported comparisons,
 but its legacy ``04_D1_Statistical_Tests`` sheet predates the two contextual
 fitted comparators and therefore contains only eight main-benchmark rows.  This
 module treats the retained trial outcomes as the source records and recomputes
@@ -154,7 +154,6 @@ MAIN_COMPARATORS = (
     ("ADAM_vs_SingleAgent", "SingleAgent"),
     ("ADAM_vs_NoAgg", "ADAM_NoAgg"),
     ("ADAM_vs_NoLLM", "ADAM_NoLLM"),
-    ("ADAM_vs_NoBlockchain", "ADAM_NoBlockchain"),
     ("ADAM_vs_NoWeaviate", "ADAM_NoWeaviate"),
 )
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recompute and export the manuscript's 35 paired trial-level comparisons."""
+"""Recompute and export the manuscript's 34 reported paired trial-level comparisons."""
 from __future__ import annotations
 
 import argparse

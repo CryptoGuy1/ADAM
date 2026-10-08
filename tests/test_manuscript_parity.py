@@ -83,7 +83,7 @@ def test_error_variance_exceeds_reference_tolerance():
 
 
 def test_holm_reproduces_published_adjustments():
-    """The ten-comparison Holm family must reproduce the revised Table 5."""
+    """The nine-comparison Holm family must reproduce the manuscript classification comparison."""
     from analysis.metrics import holm_adjust
 
     names = {
@@ -95,7 +95,6 @@ def test_holm_reproduces_published_adjustments():
         "single": "ADAM_vs_SingleAgent",
         "noagg": "ADAM_vs_NoAgg",
         "nollm": "ADAM_vs_NoLLM",
-        "noblockchain": "ADAM_vs_NoBlockchain",
         "noweav": "ADAM_vs_NoWeaviate",
     }
     raw = {short: CLAIMS["tables"]["WILCOXON"][full][0] for short, full in names.items()}
@@ -1228,3 +1227,13 @@ def test_fides_governance_validation_fails_closed_on_contract_error():
     valid, reason = client.validate(decision, event)
     assert valid is False
     assert "unavailable" in reason
+
+
+def test_weighted_outlier_limits_match_manuscript_calibration():
+    from adam.mechanisms import single_node_z_limit
+
+    normalized = [0.254, 0.239, 0.247, 0.260]
+    limits = [single_node_z_limit(p, 1.0) for p in normalized]
+    assert min(limits) == pytest.approx(1.687, abs=0.002)
+    assert max(limits) == pytest.approx(1.784, abs=0.002)
+    assert all(limit > 1.5 for limit in limits)

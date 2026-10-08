@@ -22,7 +22,7 @@ def test_revised_family_sizes_and_main_holm():
     main = main_benchmark_family(tr)
     sub = substitution_family(tr, swap)
     degraded = degraded_family(deg)
-    assert (len(main), len(sub), len(degraded)) == (10, 5, 20)
+    assert (len(main), len(sub), len(degraded)) == (9, 5, 20)
     by = {r.comparison: r for r in main}
     for key in (
         "ADAM_vs_Static", "ADAM_vs_RF_Raw", "ADAM_vs_RF_Fused",
@@ -31,7 +31,7 @@ def test_revised_family_sizes_and_main_holm():
     ):
         assert by[key].p_holm == CLAIMS["tables"]["WILCOXON"][key][1]
     assert by["ADAM_vs_Cloud"].p_holm == CLAIMS["tables"]["WILCOXON"]["ADAM_vs_Cloud"][1]
-    assert by["ADAM_vs_NoBlockchain"].p_holm == CLAIMS["tables"]["WILCOXON"]["ADAM_vs_NoBlockchain"][1]
+    assert "ADAM_vs_NoBlockchain" not in by
 
 
 def test_substitution_and_degraded_adjustments_match_manuscript():

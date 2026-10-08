@@ -14,8 +14,9 @@ the historical deployment used the newer software version.
 | Ollama seed | Not supplied | Not supplied unless an experiment explicitly overrides it |
 | Weaviate | **1.21** | **1.30.2** |
 | Vectorizer | `text2vec-transformers` | `text2vec-transformers` |
+| Embedding model | Historical exact transformer not separately preserved | `sentence-transformers-all-MiniLM-L6-v2` |
 | Blockchain | Fides Innova permissioned PoA testnet | Chain ID/configuration recorded by manifest |
-| Dataset DOI | `10.5281/zenodo.21892655` | Same public record; revised result artifacts must be deposited separately if not present there |
+| Dataset DOI | `10.5281/zenodo.23064199` | Same public record; revised result artifacts must be deposited separately if not present there |
 
 ## Reference-run provenance
 
